@@ -5,6 +5,7 @@ library(tidyverse)
 library(future)
 library(future.apply)
 library(progressr)
+library(furrr)
 
 plan(multisession, workers = availableCores())
 
@@ -21,7 +22,7 @@ if (!file.exists(extractDir)) {
   cli_alert_warning("Directory already exists. To extract archive again, please delete: {.file {extractDir}}")
 }
 
-cli_text("Indexing dataset")
+cli_text("Indexing dataset...")
 validEntries <- list.files(extractDir, recursive = TRUE, full.names = TRUE)
 
 androidapsPattern <- "^.+\\/([0-9]{8})\\/direct-sharing-396\\/upload-num([0-9]+)-ver([0-9]+)-date([0-9]{8}T[0-9]{6})-appid([0-9a-f]{32}).zip$"
@@ -113,7 +114,7 @@ parseAndroidAPSFiles <- function(files) {
         if ("Treatments.json" %in% innerFiles) {
           treatments[[length(treatments) + 1]] = archive_read(file$path, "Treatments.json") |>
             fromJSON(flatten = TRUE) |>
-            select(-starts_with("bolusCalcJson")) #Causes some headache with imcompatbile column data types...
+            select(-starts_with("bolusCalcJson")) #Causes some headache with incompatible column data types...
         }
       } else if (file$fileVersion == 2) {
         if ("GlucoseValues.json" %in% innerFiles) {
@@ -149,9 +150,11 @@ parseAndroidAPSFiles <- function(files) {
   ))
 }
 
+cli_text("Loading data...")
+
 ignore <- with_progress({
   p <- progressor(along = filesByMember)
-  future_lapply(filesByMember, \(files) {
+  future_map(filesByMember, \(files) {
     projectMemberId <- unique(files$projectMemberId)
     p(sprintf("Processing: %s", projectMemberId))
     aapsFiles <- files |> filter(type == "aaps")
@@ -159,5 +162,6 @@ ignore <- with_progress({
       return(parseAndroidAPSFiles(aapsFiles))
     }
     return(NULL)
-  }, future.seed = TRUE)
+  }, .options = furrr_options(seed = TRUE))
+
 })
