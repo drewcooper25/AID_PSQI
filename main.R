@@ -194,21 +194,65 @@ parseAndroidAPSFiles <- function(files) {
   }
 
   return(list(
-    bgReadings = bgReadings %>%
-      processAAPSV1Data(tibble(date = integer(), value = numeric())) %>%
-      mutate(date = as_datetime(date / 1000)),
-    treatments = treatments %>%
-      processAAPSV1Data(tibble(date = integer(), insulin = numeric(), carbs = numeric(), isSMB = logical())) %>%
-      mutate(date = as_datetime(date / 1000)),
-    glucoseValues = glucoseValues %>%
-      processAAPSV2Data(tibble(timestamp = integer(), value = numeric())) %>%
-      mutate(timestamp = as_datetime(timestamp / 1000)),
-    boluses = boluses %>%
-      processAAPSV2Data(tibble(timestamp = integer(), type = character(), amount = numeric())) %>%
-      mutate(timestamp = as_datetime(timestamp / 1000)),
-    carbs = carbs %>%
-      processAAPSV2Data(tibble(timestamp = integer(), amount = numeric())) %>%
-      mutate(timestamp = as_datetime(timestamp / 1000))
+    version1 = list(
+      bgReadings = bgReadings %>%
+        processAAPSV1Data(tibble(date = integer(), value = numeric())) %>%
+        mutate(date = as_datetime(date / 1000)),
+      treatments = treatments %>%
+        processAAPSV1Data(tibble(date = integer(), insulin = numeric(), carbs = numeric(), isSMB = logical())) %>%
+        mutate(date = as_datetime(date / 1000))
+    ),
+    version2 = list(
+      glucoseValues = glucoseValues %>%
+        processAAPSV2Data(tibble(timestamp = integer(), value = numeric())) %>%
+        mutate(timestamp = as_datetime(timestamp / 1000)),
+      boluses = boluses %>%
+        processAAPSV2Data(tibble(timestamp = integer(), type = character(), amount = numeric())) %>%
+        mutate(timestamp = as_datetime(timestamp / 1000)),
+      carbs = carbs %>%
+        processAAPSV2Data(tibble(timestamp = integer(), amount = numeric())) %>%
+        mutate(timestamp = as_datetime(timestamp / 1000))
+    )
+  ))
+}
+
+parseNightscoutFiles <- function(files) {
+  entries <- files %>%
+    filter(collection == "entries") %>%
+    pull(path) %>%
+    as.list() %>%
+    map(~fromJSON(gzfile(.x), flatten = TRUE)) %>%
+    keep(is.data.frame) %>% # Ignore empty collections (returned as list() by fromJSON)
+    map(~.x %>%
+      filter(if ("type" %in% names(.)) type == "sgv" else TRUE) %>%
+      select(date, sgv) %>%
+      mutate(date = as_datetime(date / 1000))
+    ) %>%
+    list_rbind()
+
+  treatments <- files %>%
+    filter(collection == "treatments") %>%
+    pull(path) %>%
+    as.list() %>%
+    map(~fromJSON(gzfile(.x), flatten = TRUE)) %>%
+    keep(is.data.frame) %>% # Ignore empty collections (returned as list() by fromJSON)
+    map(~.x %>%
+      filter(insulin > 0.0 | carbs > 0.0) %>%
+      mutate(isSMB = if ("isSMB" %in% names(.)) case_when(
+        isSMB == TRUE ~ TRUE,
+        isSMB == FALSE ~ FALSE,
+        isSMB == "true" ~ TRUE,
+        isSMB == "false" ~ FALSE,
+        TRUE ~ FALSE
+      ) else FALSE) %>%
+      select(created_at, insulin, carbs, isSMB) %>%
+      mutate(created_at = parse_date_time(created_at, orders = c("ymd_HMSz", "ymd_HMz"), tz = "UTC"))
+    ) %>%
+    list_rbind()
+
+  return(list(
+    entries = entries,
+    treatments = treatments
   ))
 }
 
@@ -217,14 +261,28 @@ cli_text("Loading dataset...")
 result <- with_progress({
   p <- progressor(along = filesByMember)
   future_map(filesByMember, \(files) {
+  #map(filesByMember, \(files) {
     projectMemberId <- unique(files$projectMemberId)
+
     aapsFiles <- files %>% filter(type == "aaps")
-    output <- NULL
+    aapsOutput <- NULL
     if (nrow(aapsFiles) > 0) {
-      output <- parseAndroidAPSFiles(aapsFiles)
+      aapsOutput <- parseAndroidAPSFiles(aapsFiles)
     }
+
+    nsFiles <- files %>% filter(type == "ns")
+    nsOutput <- NULL
+    if (nrow(nsFiles) > 0) {
+      nsOutput <- parseNightscoutFiles(nsFiles)
+    }
+
     p()
-    return(output)
+    return(list(
+      projectMemberId = projectMemberId,
+      androidAps = aapsOutput,
+      nightscout = nsOutput
+    ))
+  #})
   }, .options = furrr_options(seed = TRUE))
 })
 
