@@ -29,7 +29,7 @@ cli_text("Indexing dataset...")
 validEntries <- list.files(extractDir, recursive = TRUE, full.names = TRUE)
 
 androidapsPattern <- "^.+\\/([0-9]{8})\\/direct-sharing-396\\/upload-num([0-9]+)-ver([0-9]+)-date([0-9]{8}T[0-9]{6})-appid([0-9a-f]{32}).zip$"
-nightscoutPattern <- "^.+\\/([0-9]{8})\\/direct-sharing-31\\/([a-zA-Z]+)_([0-9]{4}-[0-9]{2}-[0-9]{2})?_to_([0-9]{4}-[0-9]{2}-[0-9]{2}).json.gz$"
+nightscoutPattern <- "^.+\\/([0-9]{8})\\/direct-sharing-31\\/([a-zA-Z]+)(?:_([0-9]{4}-[0-9]{2}-[0-9]{2})?_to_([0-9]{4}-[0-9]{2}-[0-9]{2}))?.json.gz$"
 
 parseAAPS <- function(path) {
   match <- regexec(androidapsPattern, path)
