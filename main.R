@@ -7,10 +7,34 @@ library(future.apply)
 library(progressr)
 library(furrr)
 
+source("nightscout.R")
+source("androidaps.R")
+source("file_indexing.R")
+source("gateway_linkages.R")
+source("psqi.R")
+
 plan(multisession, workers = availableCores())
 
-zipArchive <- "C:/Users/Tebbe/Desktop/SIESTA/n=147_OPENonOH_23.5.2023.zip"
+openHumansZip <- "C:/Users/Tebbe/Desktop/SIESTA/n=147_OPENonOH_23.5.2023.zip"
 extractDir <- "C:/Users/Tebbe/Desktop/extract"
+redCapDataFile <- "C:/Users/Tebbe/Desktop/SIESTA/OPEN_DATA_2023-07-18_1202.csv"
+gatewayLinkagesFile <- "C:/Users/Tebbe/Desktop/SIESTA/Participants_FULL_BIGOPEN+OPENLight_2021.07.13.xlsx"
+
+
+cli_h1("Loading REDCap dataset and Gateway linkages")
+
+gatewayLinks = loadGatewayLinkages(gatewayLinkagesFile) %>%
+  filter(!is.null(project_member_id) & !is.null(survey_record_id))
+
+redCap <- read.csv("C:/Users/Tebbe/Desktop/SIESTA/OPEN_DATA_2023-07-18_1202.csv") %>%
+  inner_join(loadGatewayLinkages(gatewayLinkagesFile), by = c("participant_id" = "id")) %>%
+  filter(!is.na(project_member_id)) %>%
+  # Ignore participants without PSQI scales
+  filter(psqi_complete == 2) %>%
+  # Adult and Child AID users only
+  filter(enrollment_type %in% c(0, 2))
+
+cli_alert_success("Found {.strong {nrow(redCap)}} applicable survey responses.")
 
 
 cli_h1("Loading OpenHumans dataset")
@@ -18,7 +42,7 @@ cli_h1("Loading OpenHumans dataset")
 cli_text(format(Sys.time(), "%X"))
 cli_text("Extracting archive...")
 if (!file.exists(extractDir)) {
-  archive_extract(zipArchive, extractDir)
+  archive_extract(openHumansZip, extractDir)
   cli_alert_success("Successfully extracted archive")
 } else {
   cli_alert_warning("Directory already exists. To extract archive again, please delete: {.file {extractDir}}")
@@ -27,46 +51,6 @@ if (!file.exists(extractDir)) {
 cli_text(format(Sys.time(), "%X"))
 cli_text("Indexing dataset...")
 validEntries <- list.files(extractDir, recursive = TRUE, full.names = TRUE)
-
-androidapsPattern <- "^.+\\/([0-9]{8})\\/direct-sharing-396\\/upload-num([0-9]+)-ver([0-9]+)-date([0-9]{8}T[0-9]{6})-appid([0-9a-f]{32}).zip$"
-nightscoutPattern <- "^.+\\/([0-9]{8})\\/direct-sharing-31\\/([a-zA-Z]+)(?:_([0-9]{4}-[0-9]{2}-[0-9]{2})?_to_([0-9]{4}-[0-9]{2}-[0-9]{2}))?.json.gz$"
-
-parseAAPS <- function(path) {
-  match <- regexec(androidapsPattern, path)
-  groups <- regmatches(path, match)[[1]]
-
-  if (length(groups) > 0) {
-    return(tibble(
-      type = "aaps",
-      projectMemberId = groups[2],
-      path = path,
-      uploadNumber = as.integer(groups[3]),
-      fileVersion = as.integer(groups[4]),
-      uploadDate = groups[5],
-      applicationId = groups[6]
-    ))
-  }
-
-  return(NULL)
-}
-
-parseNS <- function(path) {
-  match <- regexec(nightscoutPattern, path)
-  groups <- regmatches(path, match)[[1]]
-
-  if (length(groups) > 0) {
-    return(tibble(
-      type = "ns",
-      projectMemberId = groups[2],
-      path = path,
-      collection = groups[3],
-      startDate = groups[4],
-      endDate = groups[5]
-    ))
-  }
-
-  return(NULL)
-}
 
 files <- validEntries %>%
   map(function(path) {
@@ -79,189 +63,19 @@ files <- validEntries %>%
   list_rbind()
 
 filesByMember <- files %>%
+  # Don't load data from excluded participants
+  filter(projectMemberId %in% redCap$project_member_id) %>%
   group_by(projectMemberId) %>%
   group_split()
 
 cli_alert_success("Detected {.strong {nrow(files)}} relevant files by {.strong {length(filesByMember)}} members in total")
 
-readAndroidAPSFile <- function(archives, file) {
-  df <- bind_rows(lapply(archives, \(archive) {
-    contents <- archive(archive)$path
-    if (file %in% contents) {
-      return(archive_read(archive, file) %>% fromJSON())
-    }
-    return(NULL)
-  }))
-  return(df)
-}
-
-processAAPSV1Data <- function(data, schema) {
-  tibble <- data %>% list_rbind()
-  if (nrow(tibble) == 0) return(schema)
-  tibble <- tibble %>%
-    # V1 uses the date timestamp as a primary key...
-    # Only keep the entry that was uploaded last.
-    group_by(date, applicationId) %>%
-    slice_max(order_by = uploadNumber, n = 1, with_ties = FALSE) %>%
-    ungroup() %>%
-
-    # Remove invalid entries.
-    filter(isValid) %>%
-
-    # If the last uploaded entry for a given timestamp is a "deletion", remove it from the dataset.
-  { if ("isDeletion" %in% names(.)) filter(., !isDeletion) else . } %>%
-
-    select(all_of(names(schema)))
-  return(tibble)
-}
-
-processAAPSV2Data <- function(data, schema) {
-  tibble <- data %>% list_rbind()
-  if (nrow(tibble) == 0) return(schema)
-  tibble <- tibble %>%
-    # AAPS DB v2 stores "historic" entries when an entry is modified.
-    # These entries reference the original one using "referenceId".
-    # Remove them.
-  { if ("referenceId" %in% names(.)) filter(., is.na(referenceId)) else . } %>%
-
-    # When an entry is modified, the version is incremented.
-    # We only care about the latest version
-    group_by(id, applicationId) %>%
-    slice_max(order_by = version, n = 1, with_ties = FALSE) %>%
-    ungroup() %>%
-
-    # AAPS DB doesn't remove data, instead it is "invalidated". We don't want those entries, too.
-    # This field is a little broken, so we need some string matching.
-    filter(str_detect(isValid, "isValid=true")) %>%
-
-    select(all_of(names(schema)))
-  return(tibble)
-}
-
-
-parseAndroidAPSFiles <- function(files) {
-  #V1
-  bgReadings <- list()
-  treatments <- list()
-
-  #V2
-  glucoseValues <- list()
-  boluses <- list()
-  carbs <- list()
-
-  for (i in seq_len(nrow(files))) {
-    file <- files[i,]
-    tryCatch({
-      innerFiles <- archive(file$path)$path
-      if (file$fileVersion == 1) {
-        if ("BgReadings.json" %in% innerFiles) {
-          bgReadings[[length(bgReadings) + 1]] = archive_read(file$path, "BgReadings.json") %>%
-            fromJSON(flatten = TRUE) %>%
-            mutate(applicationId = file$applicationId, uploadNumber = file$uploadNumber)
-        }
-        if ("Treatments.json" %in% innerFiles) {
-          treatments[[length(treatments) + 1]] = archive_read(file$path, "Treatments.json") %>%
-            fromJSON(flatten = TRUE) %>%
-            mutate(applicationId = file$applicationId, uploadNumber = file$uploadNumber) %>%
-            select(-starts_with("bolusCalcJson")) # Causes some headache with incompatible column data types, we don't need it...
-        }
-      } else if (file$fileVersion == 2) {
-        if ("GlucoseValues.json" %in% innerFiles) {
-          glucoseValues[[length(glucoseValues) + 1]] = archive_read(file$path, "GlucoseValues.json") %>%
-            fromJSON(flatten = TRUE) %>%
-            mutate(applicationId = file$applicationId)
-        }
-        if ("Boluses.json" %in% innerFiles) {
-          boluses[[length(boluses) + 1]] = archive_read(file$path, "Boluses.json") %>%
-            fromJSON(flatten = TRUE) %>%
-            mutate(applicationId = file$applicationId)
-        }
-        if ("Carbs.json" %in% innerFiles) {
-          carbs[[length(carbs) + 1]] = archive_read(file$path, "Carbs.json") %>%
-            fromJSON(flatten = TRUE) %>%
-            mutate(applicationId = file$applicationId)
-        }
-      } else {
-        cli_alert_warning("Unknown file version {.strong {file$fileVersion}}: {.file {file$path}}")
-      }
-    }, error = \(e) {
-      if (grepl("Unrecognized archive format", conditionMessage(e))) {
-        cli_alert_warning("Invalid archive: {.file {enc2utf8(file$path)}} - skipping.")
-      } else {
-        stop(e)
-      }
-    })
-  }
-
-  return(list(
-    version1 = list(
-      bgReadings = bgReadings %>%
-        processAAPSV1Data(tibble(date = integer(), value = numeric())) %>%
-        mutate(date = as_datetime(date / 1000)),
-      treatments = treatments %>%
-        processAAPSV1Data(tibble(date = integer(), insulin = numeric(), carbs = numeric(), isSMB = logical())) %>%
-        mutate(date = as_datetime(date / 1000))
-    ),
-    version2 = list(
-      glucoseValues = glucoseValues %>%
-        processAAPSV2Data(tibble(timestamp = integer(), value = numeric())) %>%
-        mutate(timestamp = as_datetime(timestamp / 1000)),
-      boluses = boluses %>%
-        processAAPSV2Data(tibble(timestamp = integer(), type = character(), amount = numeric())) %>%
-        mutate(timestamp = as_datetime(timestamp / 1000)),
-      carbs = carbs %>%
-        processAAPSV2Data(tibble(timestamp = integer(), amount = numeric())) %>%
-        mutate(timestamp = as_datetime(timestamp / 1000))
-    )
-  ))
-}
-
-parseNightscoutFiles <- function(files) {
-  entries <- files %>%
-    filter(collection == "entries") %>%
-    pull(path) %>%
-    as.list() %>%
-    map(~fromJSON(gzfile(.x), flatten = TRUE)) %>%
-    keep(is.data.frame) %>% # Ignore empty collections (returned as list() by fromJSON)
-    map(~.x %>%
-      filter(if ("type" %in% names(.)) type == "sgv" else TRUE) %>%
-      select(date, sgv) %>%
-      mutate(date = as_datetime(date / 1000))
-    ) %>%
-    list_rbind()
-
-  treatments <- files %>%
-    filter(collection == "treatments") %>%
-    pull(path) %>%
-    as.list() %>%
-    map(~fromJSON(gzfile(.x), flatten = TRUE)) %>%
-    keep(is.data.frame) %>% # Ignore empty collections (returned as list() by fromJSON)
-    map(~.x %>%
-      filter((insulin > 0.0 | carbs > 0.0) & (is.na(duration) | duration == 0.0)) %>%
-      mutate(isSMB = if ("isSMB" %in% names(.)) case_when(
-        isSMB == TRUE ~ TRUE,
-        isSMB == FALSE ~ FALSE,
-        isSMB == "true" ~ TRUE,
-        isSMB == "false" ~ FALSE,
-        TRUE ~ FALSE
-      ) else FALSE) %>%
-      select(created_at, insulin, carbs, isSMB) %>%
-      mutate(created_at = parse_date_time(created_at, orders = c("ymd_HMSz", "ymd_HMz"), tz = "UTC"))
-    ) %>%
-    list_rbind()
-
-  return(list(
-    entries = entries,
-    treatments = treatments
-  ))
-}
-
 cli_text(format(Sys.time(), "%X"))
 cli_text("Loading dataset...")
-result <- with_progress({
+treatmentData <- with_progress({
   p <- progressor(along = filesByMember)
   future_map(filesByMember, \(files) {
-  #map(filesByMember, \(files) {
+    #map(filesByMember, \(files) {
     projectMemberId <- unique(files$projectMemberId)
 
     aapsFiles <- files %>% filter(type == "aaps")
@@ -277,14 +91,88 @@ result <- with_progress({
     }
 
     p()
-    return(list(
+    list(
       projectMemberId = projectMemberId,
       androidAps = aapsOutput,
       nightscout = nsOutput
-    ))
-  #})
+    )
+    #})
   }, .options = furrr_options(seed = TRUE))
 })
 
+# Kill worker processes and free-up memory
+plan(sequential)
+
 cli_text(format(Sys.time(), "%X"))
-cli_alert_success("Successfully loaded dataset")
+cli_alert_success("Successfully loaded OpenHumans dataset")
+
+rawStudyData <- lapply(treatmentData, \(participant) {
+  redCap <- redCap %>%
+    filter(project_member_id == participant$projectMemberId) %>%
+    as.list()
+  psqiTimestamp <- as_datetime(redCap$psqi_timestamp)
+  print(psqiTimestamp)
+  androidAps <- NULL
+  if (!is.null(participant$androidAPS)) {
+    androidAps <- list(
+      version1 = list(
+        bgReadings = participant$androidAps$version1$bgReadings %>%
+          filter(between(date, psqiTimestamp - days(28), psqiTimestamp)),
+        treatments = participant$androidAps$version1$treatments %>%
+          filter(between(date, psqiTimestamp - days(28), psqiTimestamp))
+      ),
+      version2 = list(
+        glucoseValues = participant$androidAps$version2$glucoseValues %>%
+          filter(between(timestamp, psqiTimestamp - days(28), psqiTimestamp)),
+        boluses = participant$androidAps$version2$boluses %>%
+          filter(between(timestamp, psqiTimestamp - days(28), psqiTimestamp)),
+        carbs = participant$androidAps$version2$carbs %>%
+          filter(between(timestamp, psqiTimestamp - days(28), psqiTimestamp))
+      )
+    )
+  }
+  nightscout <- NULL
+  if (!is.null(participant$nightscout) &&
+    nrow(participant$nightscout$entries) > 0 &&
+    nrow(participant$nightscout$treatments) > 0) {
+    nightscout <- list(
+      entries = participant$nightscout$entries %>%
+        filter(between(date, psqiTimestamp - days(28), psqiTimestamp)),
+      treatments = participant$nightscout$treatments %>%
+        filter(between(created_at, psqiTimestamp - days(28), psqiTimestamp))
+    )
+  }
+
+  list(
+    projectMemberId = participant$projectMemberId,
+    redCap = redCap,
+    androidAps = androidAps,
+    nightscout = nightscout
+  )
+})
+
+dataQuantityTotal <- lapply(treatmentData, \(participant) {
+  tibble(
+    projectMemberId = participant$projectMemberId,
+    aapsV1BgReadingsCount = nrow(participant$androidAps$version1$bgReadings %||% tibble()),
+    aapsV1TreatmentsCount = nrow(participant$androidAps$version1$treatments %||% tibble()),
+    aapsV2GlucoseValuesCount = nrow(participant$androidAps$version2$glucoseValues %||% tibble()),
+    aapsV2BolusesCount = nrow(participant$androidAps$version2$boluses %||% tibble()),
+    aapsV2CarbsCount = nrow(participant$androidAps$version2$carbs %||% tibble()),
+    nsEntriesCount = nrow(participant$nightscout$entries %||% tibble()),
+    nsTreatmentsCount = nrow(participant$androidAps$version2$carbs %||% tibble())
+  )
+}) %>% list_rbind()
+
+dataQuantityPSQI <- lapply(rawStudyData, \(participant) {
+  tibble(
+    projectMemberId = participant$projectMemberId,
+    aapsV1BgReadingsCount = nrow(participant$androidAps$version1$bgReadings %||% tibble()),
+    aapsV1TreatmentsCount = nrow(participant$androidAps$version1$treatments %||% tibble()),
+    aapsV2GlucoseValuesCount = nrow(participant$androidAps$version2$glucoseValues %||% tibble()),
+    aapsV2BolusesCount = nrow(participant$androidAps$version2$boluses %||% tibble()),
+    aapsV2CarbsCount = nrow(participant$androidAps$version2$carbs %||% tibble()),
+    nsEntriesCount = nrow(participant$nightscout$entries %||% tibble()),
+    nsTreatmentsCount = nrow(participant$androidAps$version2$carbs %||% tibble())
+  )
+}) %>% list_rbind()
