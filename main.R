@@ -144,6 +144,7 @@ rawStudyData <- lapply(treatmentData, \(participant) {
 
   list(
     projectMemberId = participant$projectMemberId,
+    psqiTimestamp = redCap$psqi_timestamp,
     redCap = redCap,
     androidAps = androidAps,
     nightscout = nightscout
@@ -159,7 +160,7 @@ dataQuantityTotal <- lapply(treatmentData, \(participant) {
     aapsV2BolusesCount = nrow(participant$androidAps$version2$boluses %||% tibble()),
     aapsV2CarbsCount = nrow(participant$androidAps$version2$carbs %||% tibble()),
     nsEntriesCount = nrow(participant$nightscout$entries %||% tibble()),
-    nsTreatmentsCount = nrow(participant$androidAps$version2$carbs %||% tibble())
+    nsTreatmentsCount = nrow(participant$nightscout$treatments %||% tibble())
   )
 }) %>% list_rbind()
 
@@ -172,6 +173,6 @@ dataQuantityPSQI <- lapply(rawStudyData, \(participant) {
     aapsV2BolusesCount = nrow(participant$androidAps$version2$boluses %||% tibble()),
     aapsV2CarbsCount = nrow(participant$androidAps$version2$carbs %||% tibble()),
     nsEntriesCount = nrow(participant$nightscout$entries %||% tibble()),
-    nsTreatmentsCount = nrow(participant$androidAps$version2$carbs %||% tibble())
+    nsTreatmentsCount = nrow(participant$nightscout$treatments %||% tibble())
   )
 }) %>% list_rbind()
