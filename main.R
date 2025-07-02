@@ -110,10 +110,9 @@ rawStudyData <- lapply(treatmentData, \(participant) {
   redCap <- redCap %>%
     filter(project_member_id == participant$projectMemberId) %>%
     as.list()
-  psqiTimestamp <- as_datetime(redCap$psqi_timestamp)
-  print(psqiTimestamp)
+  psqiTimestamp <- as_datetime(redCap$psqi_timestamp, tz = "Europe/Berlin")
   androidAps <- NULL
-  if (!is.null(participant$androidAPS)) {
+  if (!is.null(participant$androidAps)) {
     androidAps <- list(
       version1 = list(
         bgReadings = participant$androidAps$version1$bgReadings %>%
