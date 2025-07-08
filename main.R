@@ -6,6 +6,7 @@ library(future)
 library(future.apply)
 library(progressr)
 library(furrr)
+library(magrittr)
 
 source("nightscout.R")
 source("androidaps.R")
@@ -110,69 +111,82 @@ rawStudyData <- lapply(treatmentData, \(participant) {
   redCap <- redCap %>%
     filter(project_member_id == participant$projectMemberId) %>%
     as.list()
+  # REDCap instance was hosted by Charite in Berlin
   psqiTimestamp <- as_datetime(redCap$psqi_timestamp, tz = "Europe/Berlin")
-  androidAps <- NULL
+
+  androidApsBgReadings <- tibble(date = as.POSIXct(character(), tz = "UTC"), value = integer())
+  androidApsTreatments <- tibble(date = as.POSIXct(character(), tz = "UTC"), insulin = double(), carbs = integer(), isSMB = logical())
+
   if (!is.null(participant$androidAps)) {
-    androidAps <- list(
-      version1 = list(
-        bgReadings = participant$androidAps$version1$bgReadings %>%
-          filter(between(date, psqiTimestamp - days(28), psqiTimestamp)),
-        treatments = participant$androidAps$version1$treatments %>%
-          filter(between(date, psqiTimestamp - days(28), psqiTimestamp))
-      ),
-      version2 = list(
-        glucoseValues = participant$androidAps$version2$glucoseValues %>%
-          filter(between(timestamp, psqiTimestamp - days(28), psqiTimestamp)),
-        boluses = participant$androidAps$version2$boluses %>%
-          filter(between(timestamp, psqiTimestamp - days(28), psqiTimestamp)),
-        carbs = participant$androidAps$version2$carbs %>%
-          filter(between(timestamp, psqiTimestamp - days(28), psqiTimestamp))
-      )
-    )
+    androidApsBgReadings <- participant$androidAps$version1$bgReadings %>%
+      filter(between(date, psqiTimestamp - days(28), psqiTimestamp))
+    androidApsTreatments <- participant$androidAps$version1$treatments %>%
+      filter(between(date, psqiTimestamp - days(28), psqiTimestamp))
+
+    # None of the applicable participants have AAPS v2 data for the PSQI time range, so I won't spend time on handling that.
+    # Putting stop marks here in case that ever changes.
+    participant$androidAps$version2$glucoseValues %>%
+      filter(between(timestamp, psqiTimestamp - days(28), psqiTimestamp)) %>%
+    { stopifnot("Found AAPS v2 data (glucose values)" = nrow(.) == 0) }
+    participant$androidAps$version2$boluses %>%
+      filter(between(timestamp, psqiTimestamp - days(28), psqiTimestamp)) %>%
+    { stopifnot("Found AAPS v2 data (boluses)" = nrow(.) == 0) }
+    participant$androidAps$version2$carbs %>%
+      filter(between(timestamp, psqiTimestamp - days(28), psqiTimestamp)) %>%
+    { stopifnot("Found AAPS v2 data (carbs)" = nrow(.) == 0) }
+
   }
-  nightscout <- NULL
+
+  nightscoutBgReadings <- tibble(date = as.POSIXct(character(), tz = "UTC"), value = integer())
+  nightscoutTreatments <- tibble(date = as.POSIXct(character(), tz = "UTC"), insulin = double(), carbs = integer(), isSMB = logical())
   if (!is.null(participant$nightscout) &&
     nrow(participant$nightscout$entries) > 0 &&
     nrow(participant$nightscout$treatments) > 0) {
-    nightscout <- list(
-      entries = participant$nightscout$entries %>%
-        filter(between(date, psqiTimestamp - days(28), psqiTimestamp)),
-      treatments = participant$nightscout$treatments %>%
-        filter(between(created_at, psqiTimestamp - days(28), psqiTimestamp))
-    )
+    nightscoutBgReadings <- participant$nightscout$entries %>%
+      filter(between(date, psqiTimestamp - days(28), psqiTimestamp)) %>%
+      rename(value = sgv)
+    nightscoutTreatments <- participant$nightscout$treatments %>%
+      filter(between(created_at, psqiTimestamp - days(28), psqiTimestamp)) %>%
+      rename(date = created_at)
   }
+
+  bgReadings <- NULL
+  treatments <- NULL
+
+  # Use whatever data source has more bg readings
+  if (nrow(nightscoutBgReadings) >= nrow(androidApsBgReadings)) {
+    bgReadings = nightscoutBgReadings
+    treatments = nightscoutTreatments
+  } else {
+    bgReadings = androidApsBgReadings
+    treatments = androidApsTreatments
+  }
+
+  # Remove duplicated bg readings with minimal change in time
+  bgReadings %<>%
+    arrange(date) %<>%
+    mutate(time_diff = as.numeric(difftime(date, lag(date), units = "secs"))) %<>%
+    filter(is.na(time_diff) | time_diff > 60) %<>%
+    select(-time_diff)
 
   list(
     projectMemberId = participant$projectMemberId,
-    psqiTimestamp = redCap$psqi_timestamp,
-    redCap = redCap,
-    androidAps = androidAps,
-    nightscout = nightscout
+    bgReadings = bgReadings,
+    treatments = treatments
   )
 })
 
-dataQuantityTotal <- lapply(treatmentData, \(participant) {
+dataQuantity <- lapply(rawStudyData, \(participant) {
   tibble(
     projectMemberId = participant$projectMemberId,
-    aapsV1BgReadingsCount = nrow(participant$androidAps$version1$bgReadings %||% tibble()),
-    aapsV1TreatmentsCount = nrow(participant$androidAps$version1$treatments %||% tibble()),
-    aapsV2GlucoseValuesCount = nrow(participant$androidAps$version2$glucoseValues %||% tibble()),
-    aapsV2BolusesCount = nrow(participant$androidAps$version2$boluses %||% tibble()),
-    aapsV2CarbsCount = nrow(participant$androidAps$version2$carbs %||% tibble()),
-    nsEntriesCount = nrow(participant$nightscout$entries %||% tibble()),
-    nsTreatmentsCount = nrow(participant$nightscout$treatments %||% tibble())
+    bgReadingsCount = nrow(participant$bgReadings),
+    treatmentsCount = nrow(participant$treatments),
+    smbs = nrow(participant$treatments %>% filter(isSMB & insulin > 0.0)),
+    nonSMBs = nrow(participant$treatments %>% filter(!isSMB & insulin > 0.0)),
+    carbEntries = nrow(participant$treatments %>% filter(carbs > 0.0)),
   )
 }) %>% list_rbind()
 
-dataQuantityPSQI <- lapply(rawStudyData, \(participant) {
-  tibble(
-    projectMemberId = participant$projectMemberId,
-    aapsV1BgReadingsCount = nrow(participant$androidAps$version1$bgReadings %||% tibble()),
-    aapsV1TreatmentsCount = nrow(participant$androidAps$version1$treatments %||% tibble()),
-    aapsV2GlucoseValuesCount = nrow(participant$androidAps$version2$glucoseValues %||% tibble()),
-    aapsV2BolusesCount = nrow(participant$androidAps$version2$boluses %||% tibble()),
-    aapsV2CarbsCount = nrow(participant$androidAps$version2$carbs %||% tibble()),
-    nsEntriesCount = nrow(participant$nightscout$entries %||% tibble()),
-    nsTreatmentsCount = nrow(participant$nightscout$treatments %||% tibble())
-  )
-}) %>% list_rbind()
+bgReadings <- lapply(rawStudyData, \(p) { p$bgReadings %>% mutate(projectMemberId = p$projectMemberId) }) %>% list_rbind()
+treatments <- lapply(rawStudyData, \(p) { p$treatments %>% mutate(projectMemberId = p$projectMemberId) }) %>% list_rbind()
+psqi <- redCap %>% calculatePSQIScores(.) %>% mutate(project_member_id = redCap$project_member_id)

@@ -77,7 +77,7 @@ calculatePSQIScores <- function(redCap) {
                             component5 +
                             component6 +
                             component7)
-  list(
+  tibble(
     component1 = component1,
     component2 = component2,
     component3 = component3,
@@ -85,6 +85,8 @@ calculatePSQIScores <- function(redCap) {
     component5 = component5,
     component6 = component6,
     component7 = component7,
-    globalScore = globalScore
+    globalScore = globalScore,
+    bedtime = bedtime,
+    gettingUpTime = gettingUpTime,
   )
 }
