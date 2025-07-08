@@ -13,6 +13,7 @@ source("androidaps.R")
 source("file_indexing.R")
 source("gateway_linkages.R")
 source("psqi.R")
+source("gv_metrics.R")
 
 plan(multisession, workers = availableCores())
 
@@ -165,9 +166,9 @@ rawStudyData <- lapply(treatmentData, \(participant) {
   # Remove duplicated bg readings with minimal change in time
   bgReadings %<>%
     arrange(date) %<>%
-    mutate(time_diff = as.numeric(difftime(date, lag(date), units = "secs"))) %<>%
-    filter(is.na(time_diff) | time_diff > 60) %<>%
-    select(-time_diff)
+    mutate(timeDiff = as.numeric(difftime(date, lag(date), units = "secs"))) %<>%
+    filter(is.na(timeDiff) | timeDiff > 60) %<>%
+    select(-timeDiff)
 
   list(
     projectMemberId = participant$projectMemberId,
@@ -189,4 +190,22 @@ dataQuantity <- lapply(rawStudyData, \(participant) {
 
 bgReadings <- lapply(rawStudyData, \(p) { p$bgReadings %>% mutate(projectMemberId = p$projectMemberId) }) %>% list_rbind()
 treatments <- lapply(rawStudyData, \(p) { p$treatments %>% mutate(projectMemberId = p$projectMemberId) }) %>% list_rbind()
-psqi <- redCap %>% calculatePSQIScores(.) %>% mutate(project_member_id = redCap$project_member_id)
+
+psqi <- redCap %>%
+  calculatePSQIScores(.) %>%
+  mutate(projectMemberId = redCap$project_member_id)
+
+gvMetrics <- bgReadings %>%
+  group_by(projectMemberId) %>%
+  calculateGVMetrics()
+
+ggplot(data = inner_join(gvMetrics, psqi, by = "projectMemberId") %>%
+         filter(!is.na(globalScore),
+                !is.na(percentOutOfRange)),
+       aes(x = percentOutOfRange, y = globalScore)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = TRUE, color = "blue") +
+  labs(x = "Percent out of Range",
+       y = "PSQI Global Score",
+       title = "Percent out of Range vs PSQI Global Score") +
+  theme_minimal()
