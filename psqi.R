@@ -64,10 +64,10 @@ calculatePSQIScores <- function(redCap) {
   # Use integer division for mapping to final component score
   component5 <- as.integer((questions5bTo5jScores + 8) %/% 9)
 
-  #Component 6: Use of sleep medication
+  # Component 6: Use of sleep medication
   component6 <- as.integer(redCap$psqi_7)
 
-  #Component 7: Daytime dysfunction
+  # Component 7: Daytime dysfunction
   component7 <- as.integer((redCap$psqi_8 + redCap$psqi_9 + 1) %/% 2)
 
   globalScore <- as.integer(component1 +
