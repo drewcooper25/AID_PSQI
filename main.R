@@ -175,6 +175,7 @@ rawStudyData <- lapply(treatmentData, \(participant) {
 
   # Remove duplicated bg readings with minimal change in time
   bgReadings %<>%
+    filter(value >= 30) %<>% # Remove "flat tires" (sensor errors / failures)
     arrange(date) %<>%
     mutate(timeDiff = as.numeric(difftime(date, lag(date), units = "secs"))) %<>%
     filter(is.na(timeDiff) | timeDiff > 60) %<>%
