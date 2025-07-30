@@ -271,7 +271,6 @@ manualSleepInteractions <- treatments %>%
   inner_join(redCap %>% select(project_member_id, enrollment_type),
              by = c("projectMemberId" = "project_member_id")) %>%
   inner_join(dataQuantity %>% select(projectMemberId, bgReadingsCount), "projectMemberId") %>%
-  mutate(nSleepInteractionsScaled = nSleepInteractions / (bgReadingsCount / 8064)) %>%
   filter(!projectMemberId %in% excluded)
 
 data <- inner_join(psqi, manualSleepInteractions, by = "projectMemberId") %>%
@@ -282,5 +281,5 @@ data <- inner_join(psqi, manualSleepInteractions, by = "projectMemberId") %>%
   filter(!projectMemberId %in% excluded) %>%
   drop_na(nSleepInteractions, globalScore)
 
-print(cor.test(data$nSleepInteractions, data$globalScore, method = "spearman"))
-print(cor.test(data$nSleepInteractions, data$globalScore, method = "kendall"))
+print(cor.test(data$percentBelowRange, data$globalScore, method = "spearman"))
+print(cor.test(data$percentBelowRange, data$globalScore, method = "kendall"))

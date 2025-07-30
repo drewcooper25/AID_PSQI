@@ -60,8 +60,7 @@ eCarbsThresholds <- list(
   "72492017" = 2,
   "91391413" = 3,
   "92076618" = 7,
-  "93708481" = 3,
-  "99478201" = 1
+  "93708481" = 3
 )
 
 # These people probably had some misunderstandings with the 24 hour system
