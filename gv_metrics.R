@@ -12,7 +12,7 @@ summarizeTimeDiffs <- function(bgReadings, filterExpr) {
     mutate(timeDiff = as.numeric(difftime(date, lag(date), units = "secs"))) %>%
     filter(!!filterExpr) %>%
     # Ignore time ranges where the gap is too large
-    filter(timeDiff <= 180000) %>%
+    filter(timeDiff <= 10800) %>%
     summarise(totalTime = sum(timeDiff, na.rm = TRUE)) %>%
     pull(totalTime)
 }

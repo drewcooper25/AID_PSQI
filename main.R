@@ -14,6 +14,7 @@ source("file_indexing.R")
 source("gateway_linkages.R")
 source("psqi.R")
 source("gv_metrics.R")
+source("cleanup_data.R")
 
 plan(multisession, workers = availableCores())
 
@@ -21,6 +22,7 @@ openHumansZip <- "C:/Users/Tebbe/Desktop/SIESTA/n=147_OPENonOH_23.5.2023.zip"
 extractDir <- "C:/Users/Tebbe/Desktop/extract"
 redCapDataFile <- "C:/Users/Tebbe/Desktop/SIESTA/OPEN_DATA_2023-07-18_1202.csv"
 gatewayLinkagesFile <- "C:/Users/Tebbe/Desktop/SIESTA/Participants_FULL_BIGOPEN+OPENLight_2021.07.13.xlsx"
+timezonesFile <- "C:/Users/Tebbe/Desktop/SIESTA/timezones.xlsx"
 
 
 cli_h1("Loading REDCap dataset and Gateway linkages")
@@ -33,11 +35,18 @@ redCap <- read.csv("C:/Users/Tebbe/Desktop/SIESTA/OPEN_DATA_2023-07-18_1202.csv"
   filter(!is.na(project_member_id)) %>%
   # Ignore participants without PSQI scales
   filter(psqi_complete == 2) %>%
-  # Adult and Child AID users only
-  filter(enrollment_type %in% c(0, 2))
+  # Ignore excluded participants
+  filter(!(project_member_id) %in% excluded) %>%
+  # Parents and Child AID users only
+  filter(enrollment_type %in% c(0, 2)) %>%
+  # Replace wrong bedtime values
+  rowwise() %>%
+  mutate(psqi_1 = ifelse(project_member_id %in% names(bedtimeOverride), bedtimeOverride[[project_member_id]], psqi_1)) %>%
+  ungroup()
 
 cli_alert_success("Found {.strong {nrow(redCap)}} applicable survey responses.")
 
+timezones <- read_excel(timezonesFile)
 
 cli_h1("Loading OpenHumans dataset")
 
@@ -88,6 +97,7 @@ treatmentData <- with_progress({
 
     nsFiles <- files %>% filter(type == "ns")
     nsOutput <- NULL
+
     if (nrow(nsFiles) > 0) {
       nsOutput <- parseNightscoutFiles(nsFiles)
     }
@@ -170,6 +180,16 @@ rawStudyData <- lapply(treatmentData, \(participant) {
     filter(is.na(timeDiff) | timeDiff > 60) %<>%
     select(-timeDiff)
 
+  smbThreshold = smbThresholds[[participant$projectMemberId]]
+  if (!is.null(smbThreshold)) {
+    treatments %<>% mutate(isSMB = isSMB | ((is.na(carbs) | carbs == 0.0) & insulin > 0.0 & insulin <= smbThreshold))
+  }
+
+  eCarbsThreshold = eCarbsThresholds[[participant$projectMemberId]]
+  if (!is.null(eCarbsThreshold)) {
+    treatments %<>% filter((!is.na(insulin) & insulin > 0.0) | carbs > eCarbsThreshold)
+  }
+
   list(
     projectMemberId = participant$projectMemberId,
     bgReadings = bgReadings,
@@ -199,13 +219,68 @@ gvMetrics <- bgReadings %>%
   group_by(projectMemberId) %>%
   calculateGVMetrics()
 
-ggplot(data = inner_join(gvMetrics, psqi, by = "projectMemberId") %>%
-         filter(!is.na(globalScore),
-                !is.na(percentOutOfRange)),
-       aes(x = percentOutOfRange, y = globalScore)) +
-  geom_point() +
-  geom_smooth(method = "lm", se = TRUE, color = "blue") +
-  labs(x = "Percent out of Range",
-       y = "PSQI Global Score",
-       title = "Percent out of Range vs PSQI Global Score") +
-  theme_minimal()
+nightlyBgReadings <- bgReadings %>%
+  left_join(psqi %>% select(projectMemberId, bedtime, gettingUpTime), by = "projectMemberId") %>%
+  left_join(timezones %>% select(projectMemberId, timezone), by = "projectMemberId") %>%
+  mutate(
+    localDate = with_tz(date, tzone = timezone),
+    timeOfDay = hours(hour(localDate)) +
+      minutes(minute(localDate)) +
+      seconds(second(localDate))
+  ) %>%
+  filter(
+    (bedtime < gettingUpTime &
+      timeOfDay >= bedtime &
+      timeOfDay < gettingUpTime) |
+      (bedtime > gettingUpTime & (timeOfDay >= bedtime | timeOfDay < gettingUpTime))
+  ) %>%
+  select(projectMemberId, date, localDate, value)
+
+nightlyGvMetrics <- nightlyBgReadings %>%
+  group_by(projectMemberId) %>%
+  calculateGVMetrics()
+
+manualSleepInteractions <- treatments %>%
+  filter(!isSMB) %>%
+  left_join(psqi %>% select(projectMemberId, bedtime, gettingUpTime), by = "projectMemberId") %>%
+  left_join(timezones %>% select(projectMemberId, timezone), by = "projectMemberId") %>%
+  mutate(
+    localDate = with_tz(date, tzone = timezone),
+    timeOfDay = hours(hour(localDate)) +
+      minutes(minute(localDate)) +
+      seconds(second(localDate))
+  ) %>%
+  filter(
+    (bedtime < gettingUpTime &
+      timeOfDay >= bedtime &
+      timeOfDay < gettingUpTime) |
+      (bedtime > gettingUpTime & (timeOfDay >= bedtime | timeOfDay < gettingUpTime))
+  ) %>%
+  arrange(projectMemberId, date) %>%
+  group_by(projectMemberId) %>%
+  mutate(
+    timeDiff = as.numeric(difftime(date, lag(date), units = "mins")),
+    newCluster = if_else(is.na(timeDiff) | timeDiff > 7, 1, 0),
+    clusterId = cumsum(newCluster)
+  ) %>%
+  ungroup() %>%
+  group_by(projectMemberId, clusterId) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  group_by(projectMemberId) %>%
+  summarise(nSleepInteractions = n(), .groups = "drop") %>%
+  inner_join(redCap %>% select(project_member_id, enrollment_type),
+             by = c("projectMemberId" = "project_member_id")) %>%
+  inner_join(dataQuantity %>% select(projectMemberId, bgReadingsCount), "projectMemberId") %>%
+  mutate(nSleepInteractionsScaled = nSleepInteractions / (bgReadingsCount / 8064)) %>%
+  filter(!projectMemberId %in% excluded)
+
+data <- inner_join(psqi, manualSleepInteractions, by = "projectMemberId") %>%
+  inner_join(gvMetrics, by = "projectMemberId") %>%
+  inner_join(redCap %>% select(project_member_id, gender),
+             by = c("projectMemberId" = "project_member_id")) %>%
+  filter(enrollment_type == 0) %>%
+  filter(!projectMemberId %in% excluded) %>%
+  drop_na(nSleepInteractions, globalScore)
+
+print(cor.test(data$nSleepInteractions, data$globalScore, method = "spearman"))
+print(cor.test(data$nSleepInteractions, data$globalScore, method = "kendall"))

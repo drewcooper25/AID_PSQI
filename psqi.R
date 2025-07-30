@@ -88,5 +88,6 @@ calculatePSQIScores <- function(redCap) {
     globalScore = globalScore,
     bedtime = bedtime,
     gettingUpTime = gettingUpTime,
+    psqiDate = as_datetime(redCap$psqi_timestamp, tz = "Europe/Berlin")
   )
 }

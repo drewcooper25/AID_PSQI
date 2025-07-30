@@ -23,7 +23,7 @@ parseNightscoutFiles <- function(files) {
     map(~fromJSON(gzfile(.x), flatten = TRUE)) %>%
     keep(is.data.frame) %>% # Ignore empty collections (returned as list() by fromJSON)
     map(~.x %>%
-      filter((insulin > 0.0 | carbs > 0.0) & (is.na(duration) | duration == 0.0)) %>%
+      filter((insulin > 0.0 | carbs > 0.0) & (is.na(duration) | duration == 0.0 | eventType %in% c("Meal Bolus", "Correction Bolus", "Snack Bolus"))) %>%
       mutate(isSMB = if ("isSMB" %in% names(.)) case_when(
         isSMB == TRUE ~ TRUE,
         isSMB == FALSE ~ FALSE,
