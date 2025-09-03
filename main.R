@@ -7,6 +7,7 @@ library(future.apply)
 library(progressr)
 library(furrr)
 library(magrittr)
+library(slider)
 
 source("nightscout.R")
 source("androidaps.R")
@@ -183,7 +184,9 @@ rawStudyData <- lapply(treatmentData, \(participant) {
 
   smbThreshold = smbThresholds[[participant$projectMemberId]]
   if (!is.null(smbThreshold)) {
-    treatments %<>% mutate(isSMB = isSMB | ((is.na(carbs) | carbs == 0.0) & insulin > 0.0 & insulin <= smbThreshold))
+    treatments %<>% mutate(isSMB = isSMB | ((is.na(carbs) | carbs == 0.0) &
+      insulin > 0.0 &
+      insulin <= smbThreshold))
   }
 
   eCarbsThreshold = eCarbsThresholds[[participant$projectMemberId]]
@@ -211,6 +214,37 @@ dataQuantity <- lapply(rawStudyData, \(participant) {
 
 bgReadings <- lapply(rawStudyData, \(p) { p$bgReadings %>% mutate(projectMemberId = p$projectMemberId) }) %>% list_rbind()
 treatments <- lapply(rawStudyData, \(p) { p$treatments %>% mutate(projectMemberId = p$projectMemberId) }) %>% list_rbind()
+
+unannouncedCarbs <- bgReadings %>%
+  group_by(projectMemberId) %>%
+  arrange(date, .by_group = TRUE) %>%
+  mutate(
+    value = slide_dbl(
+      value,
+      .f = mean,
+      .before = 2,
+      .after = 2,
+      .complete = FALSE
+    ),
+    deltaPerMinute = (value - lag(value)) / as.numeric(difftime(date, lag(date), units = "mins"))
+  ) %>%
+  filter(deltaPerMinute > 1) %>%
+  mutate(
+    timeDiff = as.numeric(difftime(date, lag(date), units = "mins")),
+    windowGroup = cumsum(if_else(is.na(timeDiff) | timeDiff > 17.5, 1, 0))
+  ) %>%
+  group_by(projectMemberId, windowGroup) %>%
+  mutate(
+    duration = as.numeric(difftime(max(date), min(date), units = "mins")),
+    avgDelta = mean(deltaPerMinute, na.rm = TRUE) * 5
+  ) %>%
+  filter(duration >= 20) %>%
+  slice_head(n = 1) %>%
+  filter(value < 100) %>%
+  ungroup() %>%
+  mutate(date = date - minutes(30)) %>%
+  arrange(projectMemberId, date) %>%
+  select(projectMemberId, date, duration, avgDelta)
 
 psqi <- redCap %>%
   calculatePSQIScores(.) %>%

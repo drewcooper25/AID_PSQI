@@ -1,4 +1,4 @@
-visualizeMember <- function(projectMemberId, psqiDate, psqiScore, bedtime, gettingUpTime, bgReadings, treatments, timezone, gender, age) {
+visualizeMember <- function(projectMemberId, psqiDate, psqiScore, bedtime, gettingUpTime, bgReadings, treatments, timezone, gender, age, uam) {
 
   periodDefinitions <- list(
     week1 = list(periodStart = psqiDate - hours(28 * 24), periodEnd = psqiDate - hours(21 * 24)),
@@ -69,10 +69,10 @@ visualizeMember <- function(projectMemberId, psqiDate, psqiScore, bedtime, getti
       xmin = as.POSIXct(-Inf), xmax = as.POSIXct(Inf), ymin = 70, ymax = 180,
       fill = "palegreen"
     ) +
-    geom_vline(xintercept = hourLines, color = "black", alpha = 0.1, size = 0.3) +
-    geom_vline(xintercept = dailyLines, color = "black", alpha = 0.3, size = 0.3) +
-    geom_vline(xintercept = weeklyLines, color = "black", alpha = 0.8, size = 0.3) +
-    geom_hline(yintercept = seq(50, 350, by = 50), color = "black", alpha = 0.1, size = 0.3) +
+    geom_vline(xintercept = hourLines, color = "black", alpha = 0.1, linewidth = 0.3) +
+    geom_vline(xintercept = dailyLines, color = "black", alpha = 0.3, linewidth = 0.3) +
+    geom_vline(xintercept = weeklyLines, color = "black", alpha = 0.8, linewidth = 0.3) +
+    geom_hline(yintercept = seq(50, 350, by = 50), color = "black", alpha = 0.1, linewidth = 0.3) +
     geom_point(data = bgWithTz,
                aes(x = localTime, y = value),
                color = "black", alpha = 1, size = 0.5) +
@@ -89,6 +89,7 @@ visualizeMember <- function(projectMemberId, psqiDate, psqiScore, bedtime, getti
     geom_point(data = treatmentsWithTz %>% filter(insulin > 0 & isSMB),
                aes(x = localTime, y = 20),
                color = "blue", alpha = 0.5, size = 1) +
+    geom_vline(data = uam, aes(xintercept = date), color = "darkorange", alpha = 0.8, linewidth = 1) +
     facet_wrap(~period, ncol = 1, scales = "free_x", strip.position = "right") +
     scale_x_datetime(
       expand = c(0, 0),
@@ -161,7 +162,8 @@ for (currentMember in unique(bgReadings$projectMemberId)) {
       filter(projectMemberId == currentMember) %>%
       pull(timezone),
     gender = gender,
-    age = age
+    age = age,
+    uam = unannouncedCarbs %>% filter(projectMemberId == currentMember)
   )
 
   dpi <- 300
