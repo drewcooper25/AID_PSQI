@@ -1,7 +1,7 @@
 library(tidyverse)
 library(readxl)
 
-loadGatewayLinkages <- function(file) {
+load_gateway_linkages <- function(file) {
   read_excel(file) %>%
     #Transform "NULL" string values in columns to NA
     mutate(

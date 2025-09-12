@@ -8,6 +8,7 @@ library(progressr)
 library(furrr)
 library(magrittr)
 library(slider)
+library(writexl)
 
 source("nightscout.R")
 source("androidaps.R")
@@ -24,26 +25,23 @@ extractDir <- "C:/Users/Tebbe/Desktop/extract"
 redCapDataFile <- "C:/Users/Tebbe/Desktop/SIESTA/OPEN_DATA_2023-07-18_1202.csv"
 gatewayLinkagesFile <- "C:/Users/Tebbe/Desktop/SIESTA/Participants_FULL_BIGOPEN+OPENLight_2021.07.13.xlsx"
 timezonesFile <- "C:/Users/Tebbe/Desktop/SIESTA/timezones.xlsx"
+outputExcel <- "C:/Users/Tebbe/Desktop/SIESTA/BgReadings.xlsx"
 
 
 cli_h1("Loading REDCap dataset and Gateway linkages")
 
-gatewayLinks = loadGatewayLinkages(gatewayLinkagesFile) %>%
+gatewayLinks = load_gateway_linkages(gatewayLinkagesFile) %>%
   filter(!is.null(project_member_id) & !is.null(survey_record_id))
 
-redCap <- read.csv("C:/Users/Tebbe/Desktop/SIESTA/OPEN_DATA_2023-07-18_1202.csv") %>%
-  inner_join(loadGatewayLinkages(gatewayLinkagesFile), by = c("participant_id" = "id")) %>%
+redCap <- read.csv(redCapDataFile) %>%
+  inner_join(gatewayLinks, by = c("participant_id" = "id")) %>%
   filter(!is.na(project_member_id)) %>%
   # Ignore participants without PSQI scales
   filter(psqi_complete == 2) %>%
   # Ignore excluded participants
-  filter(!(project_member_id) %in% excluded) %>%
-  # Parents and Child AID users only
-  filter(enrollment_type %in% c(0, 2)) %>%
-  # Replace wrong bedtime values
-  rowwise() %>%
-  mutate(psqi_1 = ifelse(project_member_id %in% names(bedtimeOverride), bedtimeOverride[[project_member_id]], psqi_1)) %>%
-  ungroup()
+  # filter(!(project_member_id) %in% excluded) %>%
+  # Adult and Adult Non Users only
+  filter(enrollment_type %in% c(0, 1))
 
 cli_alert_success("Found {.strong {nrow(redCap)}} applicable survey responses.")
 
@@ -75,8 +73,6 @@ files <- validEntries %>%
   list_rbind()
 
 filesByMember <- files %>%
-  # Don't load data from excluded participants
-  filter(projectMemberId %in% redCap$project_member_id) %>%
   group_by(projectMemberId) %>%
   group_split()
 
@@ -123,6 +119,7 @@ rawStudyData <- lapply(treatmentData, \(participant) {
   redCap <- redCap %>%
     filter(project_member_id == participant$projectMemberId) %>%
     as.list()
+  if (length(redCap$psqi_timestamp) == 0) return(NULL)
   # REDCap instance was hosted by Charite in Berlin
   psqiTimestamp <- as_datetime(redCap$psqi_timestamp, tz = "Europe/Berlin")
 
@@ -182,14 +179,14 @@ rawStudyData <- lapply(treatmentData, \(participant) {
     filter(is.na(timeDiff) | timeDiff > 60) %<>%
     select(-timeDiff)
 
-  smbThreshold = smbThresholds[[participant$projectMemberId]]
+  smbThreshold = smb_thresholds[[participant$projectMemberId]]
   if (!is.null(smbThreshold)) {
     treatments %<>% mutate(isSMB = isSMB | ((is.na(carbs) | carbs == 0.0) &
       insulin > 0.0 &
       insulin <= smbThreshold))
   }
 
-  eCarbsThreshold = eCarbsThresholds[[participant$projectMemberId]]
+  eCarbsThreshold = e_carbs_threshold[[participant$projectMemberId]]
   if (!is.null(eCarbsThreshold)) {
     treatments %<>% filter((!is.na(insulin) & insulin > 0.0) | carbs > eCarbsThreshold)
   }
@@ -199,7 +196,12 @@ rawStudyData <- lapply(treatmentData, \(participant) {
     bgReadings = bgReadings,
     treatments = treatments
   )
-})
+}) %>% compact()
+
+bg_readings <- lapply(rawStudyData, \(p) { p$bgReadings %>% mutate(project_member_id = p$projectMemberId) }) %>% list_rbind()
+write_xlsx(bg_readings, path = outputExcel)
+
+stop()
 
 dataQuantity <- lapply(rawStudyData, \(participant) {
   tibble(
@@ -212,7 +214,6 @@ dataQuantity <- lapply(rawStudyData, \(participant) {
   )
 }) %>% list_rbind()
 
-bgReadings <- lapply(rawStudyData, \(p) { p$bgReadings %>% mutate(projectMemberId = p$projectMemberId) }) %>% list_rbind()
 treatments <- lapply(rawStudyData, \(p) { p$treatments %>% mutate(projectMemberId = p$projectMemberId) }) %>% list_rbind()
 
 unannouncedCarbs <- bgReadings %>%
@@ -247,12 +248,12 @@ unannouncedCarbs <- bgReadings %>%
   select(projectMemberId, date, duration, avgDelta)
 
 psqi <- redCap %>%
-  calculatePSQIScores(.) %>%
+  calculate_psqi_scores(.) %>%
   mutate(projectMemberId = redCap$project_member_id)
 
 gvMetrics <- bgReadings %>%
   group_by(projectMemberId) %>%
-  calculateGVMetrics()
+  calculate_gv_metrics()
 
 nightlyBgReadings <- bgReadings %>%
   left_join(psqi %>% select(projectMemberId, bedtime, gettingUpTime), by = "projectMemberId") %>%
@@ -273,7 +274,7 @@ nightlyBgReadings <- bgReadings %>%
 
 nightlyGvMetrics <- nightlyBgReadings %>%
   group_by(projectMemberId) %>%
-  calculateGVMetrics()
+  calculate_gv_metrics()
 
 manualSleepInteractions <- treatments %>%
   filter(!isSMB) %>%
@@ -307,14 +308,3 @@ manualSleepInteractions <- treatments %>%
              by = c("projectMemberId" = "project_member_id")) %>%
   inner_join(dataQuantity %>% select(projectMemberId, bgReadingsCount), "projectMemberId") %>%
   filter(!projectMemberId %in% excluded)
-
-data <- inner_join(psqi, manualSleepInteractions, by = "projectMemberId") %>%
-  inner_join(gvMetrics, by = "projectMemberId") %>%
-  inner_join(redCap %>% select(project_member_id, gender),
-             by = c("projectMemberId" = "project_member_id")) %>%
-  filter(enrollment_type == 0) %>%
-  filter(!projectMemberId %in% excluded) %>%
-  drop_na(nSleepInteractions, globalScore)
-
-print(cor.test(data$percentBelowRange, data$globalScore, method = "spearman"))
-print(cor.test(data$percentBelowRange, data$globalScore, method = "kendall"))

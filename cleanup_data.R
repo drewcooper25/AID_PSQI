@@ -24,7 +24,7 @@ excluded <- list(
 # The data of these participants doesn't have flags whether a bolus was automated or not.
 # However, there are repeated small amounts of boluses, which is indicative of SMBs.
 # Boluses are manually classified as SMBs based on their amount
-smbThresholds <- list(
+smb_thresholds <- list(
   "13577203" = 0.5,
   "16184009" = 0.5,
   "20104403" = 0.5,
@@ -41,7 +41,7 @@ smbThresholds <- list(
 
 # The data of these peoples shows that they are using eCarbs ("extended carbs", small amounts of carbs logged repeatedly) to cope with fatty and high-protein meals.
 # We remove them based on their amounts
-eCarbsThresholds <- list(
+e_carbs_threshold <- list(
   "00752599" = 3,
   "03468378" = 5,
   "02773391" = 2,
@@ -68,7 +68,7 @@ eCarbsThresholds <- list(
 
 # These people probably had some misunderstandings with the 24 hour system
 # resulting in very unrealistically long sleep windows
-bedtimeOverride <- list(
+bedtime_override <- list(
   "81133880" = "23:00", # Orginally 11:00
   "99478201" = "22:00" # Originally 10:00
 )
