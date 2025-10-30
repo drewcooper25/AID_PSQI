@@ -17,7 +17,7 @@ redcap <- read.csv("/Users/drew.cooper/REDCap/OPEN_DATA_2023-07-18_1202.csv") %>
 codes <- read_excel("/Users/drew.cooper/REDCap/psqi_codex_v2_results.xlsx") %>% left_join(redcap, "record_id")
 
 #Define column labels to check; defining psqi 5j outcome labels
-cols_to_check <- c("0a_missing", "0b_none",
+cols_to_check <- c(#"0a_missing", "0b_none",
                    "1a_diabetes_related", "1b_diabetes_technology",
                    "2_childcare_related", "3_stress_mental_health",
                    "4_physical_health", "5_environment", "6_other")
@@ -63,7 +63,6 @@ write_xlsx(bool_codes, "/Users/drew.cooper/REDCap/psqi_5j_labels.xlsx")
 
 ###——————————————————————————————————————————————————————————————————————————###
 
-# Chisq testing...
 # Set up chisq test for significant differences between enrollment types across 5j responses
 results <- lapply(cols_to_check, function(col) {
   tab <- table(codes_tf$enrollment_type, codes_tf[[col]])
@@ -81,6 +80,63 @@ results_df$adj_p <- p.adjust(results_df$p_value, method = "holm")
 # Print and save chisq results
 print(results_df)
 write.csv(results_df, "/Users/drew.cooper/REDCap/enrollment-psqi5j-chisq-results.csv", row.names = FALSE)
+
+###——————————————————————————————————————————————————————————————————————————###
+
+#Chisq and fisher combined
+chi_results <- lapply(cols_to_check, function(col) {
+  tab <- table(codes_tf$enrollment_type, codes_tf[[col]])
+  
+  # Run chi-squared first (for expected counts)
+  chi_test <- suppressWarnings(chisq.test(tab))
+  expected <- chi_test$expected
+  
+  # Decide which test to use
+  if (any(tab < 5)) { #updated from "expected < 5" to "tab < 5"; stricter criteria for choosing between chisq vs fisher
+    test_used <- "Fisher"
+    test <- fisher.test(tab)
+    chisq_val <- NA  # Fisher’s test doesn’t return a chi-squared statistic
+  } else {
+    test_used <- "Chi-squared"
+    test <- chi_test
+    chisq_val <- unname(test$statistic)
+  }
+  
+  # Extract standardized residuals (only available for chi-squared)
+  resid <- if (!is.null(chi_test$stdres)) chi_test$stdres else matrix(NA, nrow = 2, ncol = 2)
+  
+  # Observed counts
+  user_count <- tab["0", "TRUE"]
+  nonuser_count <- tab["1", "TRUE"]
+  
+  data.frame(
+    category = col,
+    test_used = test_used,
+    chisq = chisq_val,
+    p_value = test$p.value,
+    adj_p = NA,  # placeholder for Holm correction
+    user_count = user_count,
+    nonuser_count = nonuser_count,
+    user_residual = resid["1", "TRUE"],
+    nonuser_residual = resid["0", "TRUE"],
+    stringsAsFactors = FALSE
+  )
+})
+
+# Combine all results
+chi_results_df <- do.call(rbind, chi_results)
+
+# Holm–Bonferroni correction
+chi_results_df$adj_p <- p.adjust(chi_results_df$p_value, method = "holm")
+
+# Arrange columns
+chi_results_df <- chi_results_df %>%
+  select(category, test_used, user_count, nonuser_count, chisq, p_value, adj_p,
+         user_residual, nonuser_residual)
+
+# View and/or export
+print(chi_results_df)
+write.csv(chi_results_df, "/Users/drew.cooper/REDCap/chi_fish_results.csv", row.names = FALSE)
 
 ###——————————————————————————————————————————————————————————————————————————###
 
