@@ -63,7 +63,7 @@ write_xlsx(bool_codes, "/Users/drew.cooper/REDCap/psqi_5j_labels.xlsx")
 
 ###——————————————————————————————————————————————————————————————————————————###
 
-# Set up chisq test for significant differences between enrollment types across 5j responses
+# OLD: Set up chisq test 
 results <- lapply(cols_to_check, function(col) {
   tab <- table(codes_tf$enrollment_type, codes_tf[[col]])
   test <- chisq.test(tab)
@@ -83,7 +83,7 @@ write.csv(results_df, "/Users/drew.cooper/REDCap/enrollment-psqi5j-chisq-results
 
 ###——————————————————————————————————————————————————————————————————————————###
 
-#Chisq and fisher combined
+#Chisq and fisher combined for significance testing between enrollment types across 5j responses
 chi_results <- lapply(cols_to_check, function(col) {
   tab <- table(codes_tf$enrollment_type, codes_tf[[col]])
   
@@ -136,7 +136,7 @@ chi_results_df <- chi_results_df %>%
 
 # View and/or export
 print(chi_results_df)
-write.csv(chi_results_df, "/Users/drew.cooper/REDCap/chi_fish_results.csv", row.names = FALSE)
+write.csv(chi_results_df, "/Users/drew.cooper/REDCap/chi_fish_5j_results.csv", row.names = FALSE)
 
 ###——————————————————————————————————————————————————————————————————————————###
 
