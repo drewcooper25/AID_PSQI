@@ -10,15 +10,17 @@ library(magrittr)
 library(slider)
 library(readxl)
 
+setwd("/Users/drew.cooper/AID_PSQI")
+
 source("cleanup_data.R")
 source("gv_metrics.R")
 source("gateway_linkages.R")
 source("psqi.R")
 
-redcap_data_file <- "C:/Users/Tebbe/Desktop/SIESTA/OPEN_DATA_2023-07-18_1202.csv"
-gateway_linkages_file <- "C:/Users/Tebbe/Desktop/SIESTA/Participants_FULL_BIGOPEN+OPENLight_2021.07.13.xlsx"
-bg_readings_file <- "C:/Users/Tebbe/Desktop/SIESTA/BgReadings.xlsx"
-labels_file <- "C:/Users/Tebbe/Desktop/SIESTA/psqi_other_labels.xlsx"
+redcap_data_file <- "/Users/drew.cooper/REDCap/OPEN_DATA_2023-07-18_1202.csv"
+gateway_linkages_file <- "/Users/drew.cooper/OPENonOH/Participants_FULL_BIGOPEN+OPENLight_2021.07.13.xlsx"
+bg_readings_file <- "/Users/drew.cooper/OPENonOH/BgReadings.xlsx"
+labels_file <- "/Users/drew.cooper/REDCap/psqi_5j_labels.xlsx" #this is updated from the scored codex
 
 labels <- read_excel(labels_file)
 
@@ -182,183 +184,236 @@ study_data <- redcap %>%
   left_join(gv_metrics, "project_member_id") %>%
   left_join(labels, "record_id")
 
+###——————————————————————————————————————————————————————————————————————————###
+# main goal is to assess significant differences between users and non-users on BOTH questionnaire sub-scales
+# THIS HAS NOT BEEN DONE YET and should be + rerun sex-based differences & organise into cleaner table
+# WOO you have a good scaffold for this.
+# Now clean up the column and output names, add counts, medians + IQRs (b/c Wilcoxon) and pretty it all up.
+###——————————————————————————————————————————————————————————————————————————###
 
-by(study_data$a1c, study_data$enrollment_type, summary)
-sd(study_data %>%
-     filter(enrollment_type == "Adult using DIYAPS") %>%
-     pull(a1c), na.rm = TRUE) /
-  sqrt(nrow(study_data %>% filter(enrollment_type == "Adult using DIYAPS" & !is.na(a1c))))
-sd(study_data %>%
-     filter(enrollment_type == "Adult not using DIYAPS") %>%
-     pull(a1c), na.rm = TRUE) /
-  sqrt(nrow(study_data %>% filter(enrollment_type == "Adult not using DIYAPS" & !is.na(a1c))))
-wilcox.test(a1c ~ enrollment_type, data = study_data)
+# Some initial renaming/restructuring to clean things up... (keeping these as factors for Wilcoxon tests)
+study_data <- study_data %>%
+  mutate(
+    diabetes = case_when(
+      type_of_diabetes %in% c("Type 1", "LADA") ~ "Type 1 or LADA",
+      type_of_diabetes %in% c("Type 2", "MODY") ~ "Type 2 or MODY",
+      TRUE ~ NA_character_  # catches any unexpected values
+    ),
+    diabetes = factor(diabetes, levels = c("Type 1 or LADA", "Type 2 or MODY"))
+  )
 
-cor.test(study_data$a1c, study_data$psqi_global_score, method = "spearman")
-cor.test(
-  study_data %>% filter(enrollment_type == "Adult using DIYAPS") %>% pull(a1c),
-  study_data %>% filter(enrollment_type == "Adult using DIYAPS") %>% pull(psqi_global_score),
-  method = "spearman"
+levels(study_data$enrollment_type)[levels(study_data$enrollment_type) == "Adult using DIYAPS"] <- "User"
+levels(study_data$enrollment_type)[levels(study_data$enrollment_type) == "Adult not using DIYAPS"] <- "Non-user"
+
+levels(study_data$gender)[levels(study_data$gender) == "Female"] <- "Women"
+levels(study_data$gender)[levels(study_data$gender) == "Male"] <- "Men"
+
+# Creating the generalised data frame skeleton
+compare_groups <- function(data, group_var, outcome_vars) {
+  results <- lapply(outcome_vars, function(var) {
+    df <- data %>% select(all_of(c(group_var, var))) %>% na.omit()
+    
+    # Force numeric conversion
+    df[[var]] <- suppressWarnings(as.numeric(df[[var]]))
+    
+    # Skip if variable not numeric or has no variance
+    if (!is.numeric(df[[var]]) || length(unique(df[[var]])) < 2) {
+      return(data.frame(
+        variable = var,
+        test_used = "Wilcoxon rank-sum",
+        statistic = NA,
+        group1 = NA,
+        group2 = NA,
+        median_group1 = NA,
+        iqr_lower_group1 = NA,
+        iqr_upper_group1 = NA,
+        median_group2 = NA,
+        iqr_lower_group2 = NA,
+        iqr_upper_group2 = NA,
+        p_value = NA,
+        stringsAsFactors = FALSE
+      ))
+    }
+    
+    # Run Wilcoxon test
+    test <- wilcox.test(df[[var]] ~ df[[group_var]])
+    
+    # Extract group names
+    group_names <- unique(df[[group_var]])
+    
+    # Compute medians and IQRs
+    median1 <- median(df[[var]][df[[group_var]] == group_names[1]], na.rm = TRUE)
+    q1_1 <- quantile(df[[var]][df[[group_var]] == group_names[1]], 0.25, na.rm = TRUE)
+    q3_1 <- quantile(df[[var]][df[[group_var]] == group_names[1]], 0.75, na.rm = TRUE)
+    
+    median2 <- median(df[[var]][df[[group_var]] == group_names[2]], na.rm = TRUE)
+    q1_2 <- quantile(df[[var]][df[[group_var]] == group_names[2]], 0.25, na.rm = TRUE)
+    q3_2 <- quantile(df[[var]][df[[group_var]] == group_names[2]], 0.75, na.rm = TRUE)
+    
+    data.frame(
+      variable = var,
+      group1 = group_names[1],
+      group2 = group_names[2],
+      median_group1 = median1,
+      iqr_lower_group1 = q1_1,
+      iqr_upper_group1 = q3_1,
+      median_group2 = median2,
+      iqr_lower_group2 = q1_2,
+      iqr_upper_group2 = q3_2,
+      test_used = "Wilcoxon rank-sum",
+      statistic = unname(test$statistic),
+      p_value = test$p.value,
+      stringsAsFactors = FALSE
+    )
+  })
+  
+  results_df <- do.call(rbind, results)
+  results_df$adj_p <- p.adjust(results_df$p_value, method = "holm")
+  results_df
+}
+
+#Example usage
+psqi_vars <- grep("^psqi_(?!.*other)", names(study_data), value = TRUE, perl = TRUE)
+hfs_vars <- grep("^hfs", names(study_data), value = TRUE)
+glycemic_vars <- c("a1c", "percent_in_range", "percent_in_tight_range",
+                   "percent_above_range", "percent_above_range_level_1", "percent_above_range_level_2",
+                   "percent_below_range", "percent_below_range_level_1", "percent_below_range_level_2",
+                   "mean", "sd", "cv")
+
+# PSQI Wilcoxon results (swap in "enrollment_type", "gender", or "diabetes")
+psqi_results <- compare_groups(study_data, "diabetes", psqi_vars)
+write.csv(psqi_results, "/Users/drew.cooper/REDCap/psqi_results_diabetes.csv", row.names = FALSE)
+
+# HFS Wilcoxon results
+hfs_results <- compare_groups(study_data, "diabetes", hfs_vars)
+write.csv(hfs_results, "/Users/drew.cooper/REDCap/hfs_results_diabetes.csv", row.names = FALSE)
+
+# Glycemic measures Wilcoxon results
+glycemic_results <- compare_groups(study_data, "diabetes", glycemic_vars)
+write.csv(glycemic_results, "/Users/drew.cooper/REDCap/glycemic_results_diabetes.csv", row.names = FALSE)
+
+###——————————————————————————————————————————————————————————————————————————###
+
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+long_df <- study_data %>%
+  pivot_longer(cols = c(enrollment_type, gender, diabetes),
+               names_to = "group_type",
+               values_to = "group_value")
+
+# Define custom palette
+custom_colors <- c(
+  # Enrollment type (users vs non-users) → shades of orange
+  "User" = "#FFA500",       # orange
+  "Non-user" = "#cc5c00",   # dark orange
+  
+  # Gender → pale pink and deep burgundy
+  "Women" = "#FFC0CB",     # pale pink
+  "Men" = "#b2334d",       # burgundy
+  
+  # Diabetes → light and dark periwinkles
+  "Type 1 or LADA" = "#CCCCFF",  # light periwinkle
+  "Type 2 or MODY" = "#6666CC"   # dark periwinkle
 )
-cor.test(
-  study_data %>% filter(enrollment_type == "Adult not using DIYAPS") %>% pull(a1c),
-  study_data %>% filter(enrollment_type == "Adult not using DIYAPS") %>% pull(psqi_global_score),
-  method = "spearman"
-)
 
-cor.test(study_data$a1c, study_data$hfs, method = "spearman")
-cor.test(
-  study_data %>% filter(enrollment_type == "Adult using DIYAPS") %>% pull(a1c),
-  study_data %>% filter(enrollment_type == "Adult using DIYAPS") %>% pull(hfs),
-  method = "spearman"
-)
-cor.test(
-  study_data %>% filter(enrollment_type == "Adult not using DIYAPS") %>% pull(a1c),
-  study_data %>% filter(enrollment_type == "Adult not using DIYAPS") %>% pull(hfs),
-  method = "spearman"
-)
+# swap in different y-values from long_df/study_data to assess different outcome measures
+p <- ggplot(long_df %>% filter(!is.na(group_value)),
+       aes(x = group_value, y = hfs, fill = group_value)) +
+  geom_violin(trim = FALSE, color = "white") +
+  geom_boxplot(width = 0.1, outlier.shape = NA, color = "white") +
+  stat_summary(fun = mean,
+               fun.min = function(x) mean(x) - qt(0.975, length(x)-1)*sd(x)/sqrt(length(x)),
+               fun.max = function(x) mean(x) + qt(0.975, length(x)-1)*sd(x)/sqrt(length(x)),
+               geom = "pointrange", color = "#dc267f", position = position_nudge(x = 0.15)) +
+  facet_wrap(~group_type, scales = "free_x") +
+  scale_fill_manual(values = custom_colors) +  # apply custom colors
+  theme_minimal() +
+  theme(
+    panel.background = element_rect(fill = "transparent", color = NA),
+    plot.background = element_rect(fill = "transparent", color = NA),
+    panel.grid.major = element_line(color = "white"),
+    panel.grid.minor = element_line(color = "white"),
+    axis.title.x = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1, color = "white"),
+    #axis.text.x = element_blank(),
+    axis.text.y = element_text(color = "white"),
+    axis.title.y = element_text(color = "white"),
+    strip.text = element_blank(),
+    legend.position = "none"
+  ) +
+  labs(y = "HFS-II Score")
 
-cor.test(study_data$psqi_global_score, study_data$hfs, method = "spearman")
-cor.test(
-  study_data %>% filter(enrollment_type == "Adult using DIYAPS") %>% pull(psqi_global_score),
-  study_data %>% filter(enrollment_type == "Adult using DIYAPS") %>% pull(hfs),
-  method = "spearman"
-)
-cor.test(
-  study_data %>% filter(enrollment_type == "Adult not using DIYAPS") %>% pull(psqi_global_score),
-  study_data %>% filter(enrollment_type == "Adult not using DIYAPS") %>% pull(hfs),
-  method = "spearman"
-)
+ggsave("/Users/drew.cooper/Documents/HDS_PhD/ISPAD-JDRF/ISPAD 2025/hfs-median-iqr-violin-plot.png",
+       plot = p, width = 20, height = 10, units = "cm", dpi = 300, bg = "transparent")
 
-by(study_data$age, study_data$enrollment_type, summary)
-sd(study_data %>%
-     filter(enrollment_type == "Adult using DIYAPS") %>%
-     pull(age), na.rm = TRUE)
-sd(study_data %>%
-     filter(enrollment_type == "Adult not using DIYAPS") %>%
-     pull(age), na.rm = TRUE)
+###——————————————————————————————————————————————————————————————————————————###
 
-by(study_data$gender, study_data$enrollment_type, summary)
-by(study_data$type_of_diabetes, study_data$enrollment_type, summary)
-by(study_data$ethnicity, study_data$enrollment_type, summary)
+psqi_questions <- study_data %>%
+  select(enrollment_type, psqi_component_1:psqi_component_7) %>%
+  pivot_longer(
+    cols = -enrollment_type,
+    names_to = "question",
+    values_to = "score",
+  ) %>%
+  group_by(enrollment_type, question) %>%
+  summarise(
+    mean = mean(score, na.rm = TRUE),
+    se = sd(score, na.rm = TRUE) /sqrt(n()),
+    .groups = "drop"
+  ) %>%
+  pivot_wider(
+    names_from = enrollment_type,
+    values_from = c(mean, se)
+  ) %>%
+  mutate(
+    diff = `mean_Adult not using DIYAPS` - `mean_Adult using DIYAPS`,
+    pooled_se = sqrt(`se_Adult not using DIYAPS`^2 + `se_Adult using DIYAPS`^2),
+    question_label = case_when(
+      question == "psqi_component_1" ~ "Subjective Sleep Quality",
+      question == "psqi_component_2" ~ "Sleep Latency",
+      question == "psqi_component_3" ~ "Sleep Duration",
+      question == "psqi_component_4" ~ "Sleep Efficiency",
+      question == "psqi_component_5" ~ "Sleep Disturbance",
+      question == "psqi_component_6" ~ "Use of Sleep Medication",
+      question == "psqi_component_7" ~ "Daytime Dyfunction"
+    )
+  )
 
-by(study_data$psqi_global_score, study_data$enrollment_type, summary)
-sd(study_data %>%
-     filter(enrollment_type == "Adult using DIYAPS") %>%
-     pull(psqi_global_score)) /
-  sqrt(nrow(study_data %>% filter(enrollment_type == "Adult using DIYAPS")))
-sd(study_data %>%
-     filter(enrollment_type == "Adult not using DIYAPS") %>%
-     pull(psqi_global_score)) /
-  sqrt(nrow(study_data %>% filter(enrollment_type == "Adult not using DIYAPS")))
-wilcox.test(psqi_global_score ~ enrollment_type, data = study_data)
+plot <- ggplot(psqi_questions, aes(y = reorder(question_label, diff))) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray50") +
+  geom_errorbarh(
+    aes(xmin = diff - 1.96 * pooled_se,
+        xmax = diff + 1.96 * pooled_se),
+    height = 0.3,
+    color = "black"
+  ) +
+  geom_point(aes(x = diff), size = 3, color = "black") +
+  xlim(-0.1, 1.0) +
+  #scale_x_discrete(-0.2, 1.0) +
+  labs(
+    x = "Mean PSQI Score Difference w/ 95% CIs (Non-Users vs. Users)",
+    y = "",
+    title = ""
+  ) +
+  theme_minimal() +
+  theme(
+    panel.background = element_rect(fill = "transparent"),
+    plot.background = element_rect(fill = "transparent", color = NA),
+    panel.border = element_rect(fill = "transparent"),
+    axis.title.x = element_text(size = 12, face = "bold"),
+    axis.text.x = element_text(size = 12),
+    axis.text.y = element_text(size = 12),
+    plot.title = element_text(size = 12, face = "bold"),
+    plot.subtitle = element_text(size = 12),
+    legend.position = "none",
+    legend.box = "horizontal"
+  )
 
-by(study_data$psqi_global_score, study_data$gender, summary)
-sd(study_data %>%
-     filter(gender == "Female") %>%
-     pull(psqi_global_score)) /
-  sqrt(nrow(study_data %>% filter(gender == "Female")))
-sd(study_data %>%
-     filter(gender == "Male") %>%
-     pull(psqi_global_score)) /
-  sqrt(nrow(study_data %>% filter(gender == "Male")))
-wilcox.test(psqi_global_score ~ gender, data = study_data)
+ggsave("psqi_differences.png", width = 25, height = 10, units = "cm", dpi = 300, bg = "transparent")
 
-by(study_data$hfs, study_data$enrollment_type, summary)
-sd(study_data %>%
-     filter(enrollment_type == "Adult using DIYAPS") %>%
-     pull(hfs)) /
-  sqrt(nrow(study_data %>% filter(enrollment_type == "Adult using DIYAPS")))
-sd(study_data %>%
-     filter(enrollment_type == "Adult not using DIYAPS") %>%
-     pull(hfs)) /
-  sqrt(nrow(study_data %>% filter(enrollment_type == "Adult not using DIYAPS")))
-wilcox.test(hfs ~ enrollment_type, data = study_data)
-
-by(study_data$hfs, study_data$gender, summary)
-sd(study_data %>%
-     filter(gender == "Female") %>%
-     pull(hfs)) /
-  sqrt(nrow(study_data %>% filter(gender == "Female")))
-sd(study_data %>%
-     filter(gender == "Male") %>%
-     pull(hfs)) /
-  sqrt(nrow(study_data %>% filter(gender == "Male")))
-wilcox.test(hfs ~ gender, data = study_data)
-
-by(study_data$hfs_b, study_data$enrollment_type, summary)
-sd(study_data %>%
-     filter(enrollment_type == "Adult using DIYAPS") %>%
-     pull(hfs_b)) /
-  sqrt(nrow(study_data %>% filter(enrollment_type == "Adult using DIYAPS")))
-sd(study_data %>%
-     filter(enrollment_type == "Adult not using DIYAPS") %>%
-     pull(hfs_b)) /
-  sqrt(nrow(study_data %>% filter(enrollment_type == "Adult not using DIYAPS")))
-wilcox.test(hfs_b ~ enrollment_type, data = study_data)
-
-by(study_data$hfs_w, study_data$enrollment_type, summary)
-sd(study_data %>%
-     filter(enrollment_type == "Adult using DIYAPS") %>%
-     pull(hfs_w)) /
-  sqrt(nrow(study_data %>% filter(enrollment_type == "Adult using DIYAPS")))
-sd(study_data %>%
-     filter(enrollment_type == "Adult not using DIYAPS") %>%
-     pull(hfs_w)) /
-  sqrt(nrow(study_data %>% filter(enrollment_type == "Adult not using DIYAPS")))
-wilcox.test(hfs_w ~ enrollment_type, data = study_data)
-
-poor_sleep <- study_data %>% filter(psqi_global_score > 5)
-poor_sleep_contingency_table <- matrix(c(
-  nrow(poor_sleep %>% filter(enrollment_type == "Adult using DIYAPS")),
-  nrow(study_data %>% filter(enrollment_type == "Adult using DIYAPS")) -
-    nrow(poor_sleep %>% filter(enrollment_type == "Adult using DIYAPS")),
-
-  nrow(poor_sleep %>% filter(enrollment_type == "Adult not using DIYAPS")),
-  nrow(study_data %>% filter(enrollment_type == "Adult not using DIYAPS")) -
-    nrow(poor_sleep %>% filter(enrollment_type == "Adult not using DIYAPS"))
-), nrow = 2)
-rownames(poor_sleep_contingency_table) <- c("PSQI > 5", "PSQI <= 5")
-colnames(poor_sleep_contingency_table) <- c("Users", "Non-Users")
-
-fisher.test(poor_sleep_contingency_table)
-chisq.test(poor_sleep_contingency_table)
-
-
-diabetes_mentioned <- study_data %>% filter(str_detect(labels, "Diabetes"))
-diabetes_mentioned_contingency_table <- matrix(c(
-  nrow(diabetes_mentioned %>% filter(enrollment_type == "Adult using DIYAPS")),
-  nrow(study_data %>% filter(enrollment_type == "Adult using DIYAPS" & psqi_5other != "")) -
-    nrow(diabetes_mentioned %>% filter(enrollment_type == "Adult using DIYAPS")),
-
-  nrow(diabetes_mentioned %>% filter(enrollment_type == "Adult not using DIYAPS")),
-  nrow(study_data %>% filter(enrollment_type == "Adult not using DIYAPS" & psqi_5other != "")) -
-    nrow(diabetes_mentioned %>% filter(enrollment_type == "Adult not using DIYAPS"))
-), nrow = 2)
-rownames(diabetes_mentioned_contingency_table) <- c("Diabetes Mentioned", "Diabetes Not Mentioned")
-colnames(diabetes_mentioned_contingency_table) <- c("Users", "Non-Users")
-
-fisher.test(diabetes_mentioned_contingency_table)
-chisq.test(diabetes_mentioned_contingency_table)
-
-
-childcare_mentioned <- study_data %>% filter(str_detect(labels, "Children"))
-childcare_mentioned_contingency_table <- matrix(c(
-  nrow(childcare_mentioned %>% filter(enrollment_type == "Adult using DIYAPS")),
-  nrow(study_data %>% filter(enrollment_type == "Adult using DIYAPS" & psqi_5other != "")) -
-    nrow(childcare_mentioned %>% filter(enrollment_type == "Adult using DIYAPS")),
-
-  nrow(childcare_mentioned %>% filter(enrollment_type == "Adult not using DIYAPS")),
-  nrow(study_data %>% filter(enrollment_type == "Adult not using DIYAPS" & psqi_5other != "")) -
-    nrow(childcare_mentioned %>% filter(enrollment_type == "Adult not using DIYAPS"))
-), nrow = 2)
-rownames(childcare_mentioned_contingency_table) <- c("Childcare Mentioned", "Childcare Not Mentioned")
-colnames(childcare_mentioned_contingency_table) <- c("Users", "Non-Users")
-
-fisher.test(childcare_mentioned_contingency_table)
-chisq.test(childcare_mentioned_contingency_table)
-
-
+###——————————————————————————————————————————————————————————————————————————###
 
 hfs_questions <- study_data %>%
   select(enrollment_type, hfs_b_6:hfs_w_18) %>%
@@ -382,17 +437,17 @@ hfs_questions <- study_data %>%
     pooled_se = sqrt(`se_Adult not using DIYAPS`^2 + `se_Adult using DIYAPS`^2),
     subscale = if_else(str_detect(question, "hfs_b"), "Behavior", "Worry"),
     question_label = case_when(
-      question == "hfs_w_1" ~ "Not recognizing low BG (W1)",
+      question == "hfs_w_1" ~ "Not recognizing low blood sugar (W1)",
       question == "hfs_w_3" ~ "Passing out in public (W3)",
-      question == "hfs_w_9" ~ "Hypo while driving (W9)",
-      question == "hfs_w_16" ~ "Interfering with important tasks (W16)",
-      question == "hfs_w_17" ~ "Hypo during sleep (W17)",
+      question == "hfs_w_9" ~ "Hypoglycemia while driving (W9)",
+      question == "hfs_w_16" ~ "Low blood sugar interfering with tasks (W16)",
+      question == "hfs_w_17" ~ "Hypoglycemia during sleep (W17)",
       question == "hfs_w_18" ~ "Getting emotionally upset (W18)",
       question == "hfs_b_6" ~ "Limited out of town travel (B6)",
       question == "hfs_b_8" ~ "Avoided visiting friends (B8)",
       question == "hfs_b_11" ~ "Made sure others were around (B11)",
-      question == "hfs_b_13" ~ "Higher BG in social situations (B13)",
-      question == "hfs_b_14" ~ "Higher BG for important tasks (B14)"
+      question == "hfs_b_13" ~ "Higher blood sugar in social situations (B13)",
+      question == "hfs_b_14" ~ "Higher blood sugar for tasks (B14)"
     )
   )
 
@@ -409,28 +464,34 @@ plot <- ggplot(hfs_questions, aes(y = reorder(question_label, diff))) +
   scale_shape_manual(values = c("Worry" = 16, "Behavior" = 1)) +
   scale_linetype_manual(values = c("Worry" = "solid", "Behavior" = "dashed")) +
   labs(
-    x = "Mean Difference (Non-Users Minus Users)",
-    y = "HFS-II Question",
-    title = "Mean Differences in HFS-II Questions Between Groups",
-    subtitle = "Error bars represent 95% confidence intervals",
+    x = "Mean HFS-II Score Difference w/ 95% CIs (Non-Users vs. Users)",
+    y = "",
+    title = "",
     shape = "Subscale",
     linetype = "Subscale"
   ) +
   theme_minimal() +
   theme(
-    axis.text.y = element_text(size = 10),
+    panel.background = element_rect(fill = "transparent"),
+    plot.background = element_rect(fill = "transparent", color = NA),
+    panel.border = element_rect(fill = "transparent"),
+    axis.title.x = element_text(size = 12, face = "bold"),
+    axis.text.x = element_text(size = 12),
+    axis.text.y = element_text(size = 12),
     plot.title = element_text(size = 12, face = "bold"),
-    plot.subtitle = element_text(size = 10),
-    legend.position = "bottom",
+    plot.subtitle = element_text(size = 12),
+    legend.position = "none",
     legend.box = "horizontal"
   ) +
   guides(shape = guide_legend(title = "Subscale"),
          linetype = "none")
 
-ggsave("hfs_differences.png", width = 7, height = 4)
+ggsave("hfs_differences.png", width = 25, height = 10, units = "cm", dpi = 300)
+
+###——————————————————————————————————————————————————————————————————————————###
 
 cgm_data_subanalysis <- study_data %>%
-  filter(enrollment_type == "Adult using DIYAPS" & days_of_data >= 25)
+  filter(enrollment_type == "User" & days_of_data >= 25)
 
 nrow(cgm_data_subanalysis)
 by(cgm_data_subanalysis$age, cgm_data_subanalysis$enrollment_type, summary)
