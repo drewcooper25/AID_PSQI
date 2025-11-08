@@ -10,6 +10,7 @@ library(magrittr)
 library(slider)
 library(readxl)
 
+rm(list=ls())
 setwd("/Users/drew.cooper/AID_PSQI")
 
 source("cleanup_data.R")
@@ -19,7 +20,7 @@ source("psqi.R")
 
 redcap_data_file <- "/Users/drew.cooper/REDCap/OPEN_DATA_2023-07-18_1202.csv"
 gateway_linkages_file <- "/Users/drew.cooper/OPENonOH/Participants_FULL_BIGOPEN+OPENLight_2021.07.13.xlsx"
-bg_readings_file <- "/Users/drew.cooper/OPENonOH/BgReadings.xlsx"
+bg_readings_file <- "/Users/drew.cooper/OPENonOH/BgReadings.xlsx" #same file as outputExcel.xlsx from main.R
 labels_file <- "/Users/drew.cooper/REDCap/psqi_5j_labels.xlsx" #this is updated from the scored codex
 
 labels <- read_excel(labels_file)
@@ -155,6 +156,7 @@ study_data <- redcap %>%
     gender,
     ethnicity,
     age,
+    a1c,
     psqi_component_1,
     psqi_component_2,
     psqi_component_3,
@@ -163,6 +165,7 @@ study_data <- redcap %>%
     psqi_component_6,
     psqi_component_7,
     psqi_global_score,
+    psqi_5other,
     hfs_b_6, # Limited my out of town travel
     hfs_b_8, # Avoided visiting friends
     hfs_b_11, # Made sure there were other people around.
@@ -176,31 +179,28 @@ study_data <- redcap %>%
     hfs_w_18, # Getting emotionally upset and difficult to deal with.
     hfs_b,
     hfs_w,
-    hfs,
-    psqi_5other,
-    a1c
+    hfs
   ) %>%
   filter(!is.na(psqi_global_score) & !is.na(hfs)) %>%
   left_join(gv_metrics, "project_member_id") %>%
   left_join(labels, "record_id")
 
 ###——————————————————————————————————————————————————————————————————————————###
-# main goal is to assess significant differences between users and non-users on BOTH questionnaire sub-scales
-# THIS HAS NOT BEEN DONE YET and should be + rerun sex-based differences & organise into cleaner table
-# WOO you have a good scaffold for this.
-# Now clean up the column and output names, add counts, medians + IQRs (b/c Wilcoxon) and pretty it all up.
-###——————————————————————————————————————————————————————————————————————————###
 
-# Some initial renaming/restructuring to clean things up... (keeping these as factors for Wilcoxon tests)
+# Some initial cleaning/renaming/restructuring to clean things up...
+study_data <- study_data[ !duplicated(study_data$record_id), ] # remove duplicates
+
 study_data <- study_data %>%
   mutate(
-    diabetes = case_when(
+    diabetes_group = case_when(
       type_of_diabetes %in% c("Type 1", "LADA") ~ "Type 1 or LADA",
       type_of_diabetes %in% c("Type 2", "MODY") ~ "Type 2 or MODY",
       TRUE ~ NA_character_  # catches any unexpected values
     ),
-    diabetes = factor(diabetes, levels = c("Type 1 or LADA", "Type 2 or MODY"))
-  )
+    diabetes_group = factor(diabetes_group, levels = c("Type 1 or LADA", "Type 2 or MODY")),
+    age = as.numeric(age)
+  ) %>%
+  relocate(diabetes_group, .after = type_of_diabetes)
 
 levels(study_data$enrollment_type)[levels(study_data$enrollment_type) == "Adult using DIYAPS"] <- "User"
 levels(study_data$enrollment_type)[levels(study_data$enrollment_type) == "Adult not using DIYAPS"] <- "Non-user"
@@ -208,7 +208,105 @@ levels(study_data$enrollment_type)[levels(study_data$enrollment_type) == "Adult 
 levels(study_data$gender)[levels(study_data$gender) == "Female"] <- "Women"
 levels(study_data$gender)[levels(study_data$gender) == "Male"] <- "Men"
 
-# Creating the generalised data frame skeleton
+study_data <- study_data %>%
+  rename(A1c = a1c,
+         TIR = percent_in_range,
+         TING = percent_in_tight_range,
+         TAR = percent_above_range,
+         TAR1 = percent_above_range_level_1,
+         TAR2 = percent_above_range_level_2,
+         TBR = percent_below_range,
+         TBR1 = percent_below_range_level_1,
+         TBR2 = percent_below_range_level_2
+  )
+
+hist(study_data$age) # replace variable with whichever you want to visualise distribution; basic normality test
+
+###—TABLE 1——————————————————————————————————————————————————————————————————###
+
+library(dplyr)
+library(tidyr)
+library(openxlsx)
+
+# Define format "fmt" function(s) to calculate n (%), mean ± sd, and median [IQR]
+fmt_n_percent <- function(n, N, digits = 1) {
+  pct <- 100 * n / N
+  sprintf(
+    paste0("%d (%.", digits, "f%%)"),
+    n, pct
+  )
+}
+
+fmt_mean_sd <- function(x, digits = 1) {
+  sprintf(
+    paste0("%.", digits, "f ± %.", digits, "f"),
+    mean(x, na.rm=TRUE),
+    sd(x, na.rm=TRUE)
+  )
+}
+
+fmt_median_iqr <- function(x, digits = 1) {
+  sprintf(
+    paste0("%.", digits, "f [%.", digits, "f–%.", digits, "f]"),
+    median(x, na.rm=TRUE),
+    quantile(x, .25, na.rm=TRUE),
+    quantile(x, .75, na.rm=TRUE)
+  )
+}
+
+summary_tbl <- study_data # reset table if need be during troubleshooting
+summary_tbl <- study_data %>%
+  # make long on all grouping variables
+  pivot_longer(
+    cols = c(enrollment_type, type_of_diabetes, gender, ethnicity),
+    names_to = "group_name",
+    values_to = "group_value"
+  ) %>%
+  mutate(group = paste0(group_value)) %>%
+  group_by(group_name, group) %>%
+  summarise(
+    n = fmt_n_percent(n(), nrow(study_data)),
+    Age = fmt_mean_sd(age),
+    across(
+      c(A1c, TIR, TING, TAR, TAR1, TAR2, TBR, TBR1, TBR2),
+      fmt_median_iqr), 
+    .groups = "drop"
+  ) %>%
+  arrange(group)
+
+overall_row <- study_data %>%
+  summarise(
+    group_name = "0_overall", 
+    group = "Overall",
+    n = fmt_n_percent(n(), nrow(study_data)),
+    Age = fmt_mean_sd(age),
+    across(
+      c(A1c, TIR, TING, TAR, TAR1, TAR2, TBR, TBR1, TBR2),
+      fmt_median_iqr)
+  )
+summary_tbl <- bind_rows(overall_row, summary_tbl)
+
+summary_tbl <- summary_tbl %>% # factorising the various group_names and groups for ordering purposes...
+  mutate(
+    group_name = factor(group_name,
+                        levels = c("0_overall", "enrollment_type", "type_of_diabetes", "gender", "ethnicity")),
+    group = case_when(
+      group_name == "enrollment_type" & group == "User" ~ factor(group, levels = c("User", "Non-user")),
+      group_name == "gender" & group == "Women" ~ factor(group, levels = c("Women", "Men")),
+      group_name == "type_of_diabetes" & group == "Type 1" ~ factor(group, levels = c("Type 1", "LADA", "Type 2", "MODY")),
+      group_name == "ethnicity" & group == "White" ~ factor(group, levels = c("White", "Mixed / Multiple ethnic groups", "Hispanic/Latino", "Arab", "Asian", "Other", "I'd rather not say")),
+      TRUE ~ factor(group)
+    )
+  )
+summary_tbl <- summary_tbl %>%
+  arrange(group_name, group)
+
+summary_tbl
+write.xlsx(summary_tbl, "/Users/drew.cooper/REDCap/table1.xlsx")
+
+###——————————————————————————————————————————————————————————————————————————###
+
+# Creating the generalised data frame skeleton for Wilcoxon testing
 compare_groups <- function(data, group_var, outcome_vars) {
   results <- lapply(outcome_vars, function(var) {
     df <- data %>% select(all_of(c(group_var, var))) %>% na.omit()
@@ -280,7 +378,7 @@ glycemic_vars <- c("a1c", "percent_in_range", "percent_in_tight_range",
                    "percent_below_range", "percent_below_range_level_1", "percent_below_range_level_2",
                    "mean", "sd", "cv")
 
-# PSQI Wilcoxon results (swap in "enrollment_type", "gender", or "diabetes")
+# PSQI Wilcoxon results (swap in "enrollment_type", "gender", or "diabetes_group")
 psqi_results <- compare_groups(study_data, "diabetes", psqi_vars)
 write.csv(psqi_results, "/Users/drew.cooper/REDCap/psqi_results_diabetes.csv", row.names = FALSE)
 
