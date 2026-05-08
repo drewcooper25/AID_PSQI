@@ -3,7 +3,7 @@ library("tidyverse")
 TIR_UPPER <- 180
 TIR_LOWER <- 70
 TITR_UPPER <- 140
-TITR_LOWER <- 80
+TITR_LOWER <- 70 # changed... was 80.
 
 TAR_LEVEL <- 250
 TBR_LEVEL <- 54

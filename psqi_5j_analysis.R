@@ -1,4 +1,4 @@
-###—EXTRACTING ENROLLMENT TYPES FOR PSQI CODEX—###
+###—PSQI 5J Processing—###
 
 ###——————————————————————————————————————————————————————————————————————————###
 # Setup: Load libraries and REDCap data 
@@ -9,15 +9,15 @@ library(glue)
 
 rm(list = ls()) # clear the environment
 
-redcap <- read_xlsx("/Users/drew.cooper/AID_PSQI/study_data.xlsx") %>% select(
+study_data <- read_excel("/Users/drew.cooper/AID_PSQI/study_data.xlsx") %>% select(
   record_id,
   gender,
   enrollment_type
-  )
-codes <- read_excel("/Users/drew.cooper/REDCap/psqi_codex_v2_results.xlsx") %>% left_join(redcap, "record_id")
+)
+codes <- read_excel("/Users/drew.cooper/REDCap/psqi_codex_v2_results.xlsx") %>% left_join(study_data, "record_id")
 
 #Define column labels to check; defining psqi 5j outcome labels
-cols_to_check <- c("0a_missing", "0b_none",
+cols_to_check <- c(#"0a_missing", "0b_none",
                    "1a_diabetes_related", "1b_diabetes_technology",
                    "2_childcare_related", "3_stress_mental_health",
                    "4_physical_health", "5_environment", "6_other")
@@ -32,90 +32,117 @@ is_true <- function(x) {
 codes_tf <- codes %>%
   mutate(across(all_of(cols_to_check), is_true))
 
-#Chisq and fisher combined for significance testing between enrollment types across 5j responses
-chi_results <- lapply(cols_to_check, function(col) {
-  tab <- table(codes_tf$enrollment_type, codes_tf[[col]])
+# Function to build a single 2x2 table for one question
+make_table <- function(question) {
+  tab <- table(
+    Group = factor(codes_tf$enrollment_type, levels = c("User", "Non-user")),
+    Response = factor(codes_tf[[question]], levels = c(TRUE, FALSE))
+  )
+  return(tab)
+}
+
+# Build named list of 2×2 tables
+twoXtwo <- setNames(lapply(cols_to_check, make_table), cols_to_check)
+
+# Compute OR and 95% CI manually
+compute_or <- function(tab) {
+  # Extract cells
+  a <- tab["User","TRUE"]
+  b <- tab["User","FALSE"]
+  c <- tab["Non-user","TRUE"]
+  d <- tab["Non-user","FALSE"]
   
-  # Run chi-squared first (for expected counts)
-  chi_test <- suppressWarnings(chisq.test(tab))
-  expected <- chi_test$expected
-  
-  # Decide which test to use
-  if (any(tab < 5)) { #updated from "expected < 5" to "tab < 5"; stricter criteria for choosing between chisq vs fisher
-    test_used <- "Fisher"
-    test <- fisher.test(tab)
-    chisq_val <- NA  # Fisher’s test doesn’t return a chi-squared statistic
-  } else {
-    test_used <- "Chi-squared"
-    test <- chi_test
-    chisq_val <- unname(test$statistic)
+  # If any cell is zero, add 0.5 (Haldane-Anscombe correction)
+  if (any(c(a,b,c,d) == 0)) {
+    a <- a + 0.5; b <- b + 0.5; c <- c + 0.5; d <- d + 0.5
   }
   
-  # Extract standardized residuals (only available for chi-squared)
-  resid <- if (!is.null(chi_test$stdres)) chi_test$stdres else matrix(NA, nrow = 2, ncol = 2)
+  # Odds ratio
+  OR <- (a*d) / (b*c)
   
-  # Observed counts
-  user_count <- tab["0", "TRUE"] # changed bools aways from char strings
-  nonuser_count <- tab["1", "TRUE"]
+  # Standard error of log(OR)
+  SE_logOR <- sqrt(1/a + 1/b + 1/c + 1/d)
   
-  data.frame(
-    category = col,
-    test_used = test_used,
-    chisq = chisq_val,
-    p_value = test$p.value,
-    adj_p = NA,  # placeholder for Holm correction
-    user_count = user_count,
-    nonuser_count = nonuser_count,
-    user_residual = resid["0", "TRUE"],
-    nonuser_residual = resid["1", "TRUE"],
-    stringsAsFactors = FALSE
+  # 95% CI
+  lower <- exp(log(OR) - 1.96*SE_logOR)
+  upper <- exp(log(OR) + 1.96*SE_logOR)
+  
+  sprintf("%.2f [%.2f, %.2f]", OR, lower, upper)
+}
+
+# add in loop to gather expected values as well
+# Function to run chi-squared or Fisher depending on cell counts
+run_test <- function(tab) {
+  
+  # If any expected cell count < 5 → Fisher
+  chi_attempt <- tryCatch(chisq.test(tab), error = function(e) NULL)
+  
+  if (is.null(chi_attempt)) {
+    # Fallback if chi-squared fails (e.g., zero margin)
+    use_fisher <- TRUE
+  } else {
+    # Proportion of expected counts < 5
+    prop_low <- mean(chi_attempt$expected < 5)
     
-    # false_users = glue("{tab[1, 1]} ({round(expected[1, 1])})"),
-    # false_non_users = glue("{tab[2, 1]} ({round(expected[2, 1])})"),
-    # true_users = glue("{tab[1, 2]} ({round(expected[1, 2])})"),
-    # true_non_users = glue("{tab[2, 2]} ({round(expected[2, 2])})")
+    # Rule: chi-squared if ≤ 20% expected < 5, else Fisher
+    use_fisher <- prop_low > 0.2
+  }
+  
+  if (use_fisher) {
+    test <- fisher.test(tab)
+    test_name <- "Fisher"
+    stat <- NA  # Fisher has no chi-square statistic
+    # Standard residuals are not meaningful for Fisher; use NA
+    resid <- c(User = NA, Non_user = NA)
+  } else {
+    test <- chi_attempt
+    test_name <- "Chi-squared"
+    stat <- unname(test$statistic)
+    # Standardized residuals: extract the two rows corresponding to User/Non-user
+    resid <- rowSums(test$stdres, na.rm = TRUE)
+  }
+  
+  # Compute OR if 2x2
+  if (all(dim(tab) == c(2,2))) {
+    OR <- compute_or(tab)
+  } else {
+    OR <- NA
+  }
+  
+  list(
+    test_used  = test_name,
+    test_stat  = stat,
+    OR         = OR,
+    resid_User = resid[1],
+    resid_Non  = resid[2],
+    p_value    = test$p.value
   )
-})
+}
 
-# Combine all results
-chi_results_df <- do.call(rbind, chi_results)
+# Run the test for each 2x2 table
+results_list <- lapply(twoXtwo, run_test)
 
-# Holm–Bonferroni correction
-chi_results_df$adj_p <- p.adjust(chi_results_df$p_value, method = "holm")
+# Convert to clean data frame
+chi_results <- tibble(
+  question = cols_to_check,
+  n_User      = sapply(twoXtwo, function(t) t["User", "TRUE"]),
+  n_Non_user  = sapply(twoXtwo, function(t) t["Non-user", "TRUE"]),
+  test_used   = sapply(results_list, `[[`, "test_used"),
+  test_stat   = sapply(results_list, `[[`, "test_stat"),
+  OR          = sapply(results_list, `[[`, "OR"),
+  resid_User  = sapply(results_list, `[[`, "resid_User"),
+  resid_Non   = sapply(results_list, `[[`, "resid_Non"),
+  p_value     = sapply(results_list, `[[`, "p_value")
+) %>%
+  mutate(adj_p_value = p.adjust(p_value, method = "holm"))
 
-# Inject Overall counts row
-overall_counts <- codes_tf %>%
-  group_by(enrollment_type) %>%
-  summarise(total_true = sum(across(all_of(cols_to_check), \(x) sum(x, na.rm = TRUE)))) %>%
-  tidyr::pivot_wider(
-    names_from = enrollment_type,
-    values_from = total_true,
-    names_prefix = "type_"
-  )
+chi_results
 
-overall_row <- data.frame(
-  category = "Overall",
-  test_used = "Overall",
-  chisq = NA,
-  p_value = NA,
-  adj_p = NA,
-  user_count = overall_counts$type_0,
-  nonuser_count = overall_counts$type_1,
-  user_residual = NA,
-  nonuser_residual = NA,
-  stringsAsFactors = FALSE
-)
+total_n <- sum(chi_results$n_User, chi_results$n_Non_user)
+total_User     <- sum(chi_results$n_User)
+total_Non_user <- sum(chi_results$n_Non_user)
 
-chi_results_df <- bind_rows(chi_results_df, overall_row)
-
-# Arrange columns
-chi_results_df <- chi_results_df %>%
-  select(category, test_used, user_count, nonuser_count, chisq, p_value, adj_p,
-         user_residual, nonuser_residual)
-
-# View and/or export
-print(chi_results_df)
-#write.csv(chi_results_df, "/Users/drew.cooper/Documents/HDS_PhD/ISPAD-JDRF/chi_fish_5j_results.csv", row.names = FALSE)
+#write.csv(chi_results, "/Users/drew.cooper/Documents/HDS_PhD/ISPAD-JDRF/chi_fish_5j_results.csv", row.names = FALSE)
 
 ###——————————————————————————————————————————————————————————————————————————###
 

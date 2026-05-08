@@ -10,6 +10,9 @@ library(magrittr)
 library(slider)
 library(writexl)
 
+setwd("/Users/drew.cooper/AID_PSQI")
+getwd()
+
 source("nightscout.R")
 source("androidaps.R")
 source("file_indexing.R")
@@ -20,12 +23,12 @@ source("cleanup_data.R")
 
 plan(multisession, workers = availableCores())
 
-openHumansZip <- "C:/Users/Tebbe/Desktop/SIESTA/n=147_OPENonOH_23.5.2023.zip"
-extractDir <- "C:/Users/Tebbe/Desktop/extract"
-redCapDataFile <- "C:/Users/Tebbe/Desktop/SIESTA/OPEN_DATA_2023-07-18_1202.csv"
-gatewayLinkagesFile <- "C:/Users/Tebbe/Desktop/SIESTA/Participants_FULL_BIGOPEN+OPENLight_2021.07.13.xlsx"
-timezonesFile <- "C:/Users/Tebbe/Desktop/SIESTA/timezones.xlsx"
-outputExcel <- "C:/Users/Tebbe/Desktop/SIESTA/BgReadings.xlsx"
+openHumansZip <- "/Users/drew.cooper/OPENonOH/zips/n=147_OPENonOH_23.5.2023.zip"
+extractDir <- "/Users/drew.cooper/OPENonOH/extract"
+redCapDataFile <- "/Users/drew.cooper/REDCap/OPEN_DATA_2023-07-18_1202.csv"
+gatewayLinkagesFile <- "/Users/drew.cooper/OPENonOH/Participants_FULL_BIGOPEN+OPENLight_2021.07.13.xlsx"
+timezonesFile <- "/Users/drew.cooper/REDCap/timezones.xlsx"
+outputExcel <- "/Users/drew.cooper/AID_PSQI/BgReadings.xlsx"
 
 
 cli_h1("Loading REDCap dataset and Gateway linkages")
@@ -202,109 +205,3 @@ bg_readings <- lapply(rawStudyData, \(p) { p$bgReadings %>% mutate(project_membe
 write_xlsx(bg_readings, path = outputExcel)
 
 stop()
-
-dataQuantity <- lapply(rawStudyData, \(participant) {
-  tibble(
-    projectMemberId = participant$projectMemberId,
-    bgReadingsCount = nrow(participant$bgReadings),
-    treatmentsCount = nrow(participant$treatments),
-    smbs = nrow(participant$treatments %>% filter(isSMB & insulin > 0.0)),
-    nonSMBs = nrow(participant$treatments %>% filter(!isSMB & insulin > 0.0)),
-    carbEntries = nrow(participant$treatments %>% filter(carbs > 0.0)),
-  )
-}) %>% list_rbind()
-
-treatments <- lapply(rawStudyData, \(p) { p$treatments %>% mutate(projectMemberId = p$projectMemberId) }) %>% list_rbind()
-
-unannouncedCarbs <- bgReadings %>%
-  group_by(projectMemberId) %>%
-  arrange(date, .by_group = TRUE) %>%
-  mutate(
-    value = slide_dbl(
-      value,
-      .f = mean,
-      .before = 2,
-      .after = 2,
-      .complete = FALSE
-    ),
-    deltaPerMinute = (value - lag(value)) / as.numeric(difftime(date, lag(date), units = "mins"))
-  ) %>%
-  filter(deltaPerMinute > 1) %>%
-  mutate(
-    timeDiff = as.numeric(difftime(date, lag(date), units = "mins")),
-    windowGroup = cumsum(if_else(is.na(timeDiff) | timeDiff > 17.5, 1, 0))
-  ) %>%
-  group_by(projectMemberId, windowGroup) %>%
-  mutate(
-    duration = as.numeric(difftime(max(date), min(date), units = "mins")),
-    avgDelta = mean(deltaPerMinute, na.rm = TRUE) * 5
-  ) %>%
-  filter(duration >= 20) %>%
-  slice_head(n = 1) %>%
-  filter(value < 100) %>%
-  ungroup() %>%
-  mutate(date = date - minutes(30)) %>%
-  arrange(projectMemberId, date) %>%
-  select(projectMemberId, date, duration, avgDelta)
-
-psqi <- redCap %>%
-  calculate_psqi_scores(.) %>%
-  mutate(projectMemberId = redCap$project_member_id)
-
-gvMetrics <- bgReadings %>%
-  group_by(projectMemberId) %>%
-  calculate_gv_metrics()
-
-nightlyBgReadings <- bgReadings %>%
-  left_join(psqi %>% select(projectMemberId, bedtime, gettingUpTime), by = "projectMemberId") %>%
-  left_join(timezones %>% select(projectMemberId, timezone), by = "projectMemberId") %>%
-  mutate(
-    localDate = with_tz(date, tzone = timezone),
-    timeOfDay = hours(hour(localDate)) +
-      minutes(minute(localDate)) +
-      seconds(second(localDate))
-  ) %>%
-  filter(
-    (bedtime < gettingUpTime &
-      timeOfDay >= bedtime &
-      timeOfDay < gettingUpTime) |
-      (bedtime > gettingUpTime & (timeOfDay >= bedtime | timeOfDay < gettingUpTime))
-  ) %>%
-  select(projectMemberId, date, localDate, value)
-
-nightlyGvMetrics <- nightlyBgReadings %>%
-  group_by(projectMemberId) %>%
-  calculate_gv_metrics()
-
-manualSleepInteractions <- treatments %>%
-  filter(!isSMB) %>%
-  left_join(psqi %>% select(projectMemberId, bedtime, gettingUpTime), by = "projectMemberId") %>%
-  left_join(timezones %>% select(projectMemberId, timezone), by = "projectMemberId") %>%
-  mutate(
-    localDate = with_tz(date, tzone = timezone),
-    timeOfDay = hours(hour(localDate)) +
-      minutes(minute(localDate)) +
-      seconds(second(localDate))
-  ) %>%
-  filter(
-    (bedtime < gettingUpTime &
-      timeOfDay >= bedtime &
-      timeOfDay < gettingUpTime) |
-      (bedtime > gettingUpTime & (timeOfDay >= bedtime | timeOfDay < gettingUpTime))
-  ) %>%
-  arrange(projectMemberId, date) %>%
-  group_by(projectMemberId) %>%
-  mutate(
-    timeDiff = as.numeric(difftime(date, lag(date), units = "mins")),
-    newCluster = if_else(is.na(timeDiff) | timeDiff > 7, 1, 0),
-    clusterId = cumsum(newCluster)
-  ) %>%
-  ungroup() %>%
-  group_by(projectMemberId, clusterId) %>%
-  summarise(n = n(), .groups = "drop") %>%
-  group_by(projectMemberId) %>%
-  summarise(nSleepInteractions = n(), .groups = "drop") %>%
-  inner_join(redCap %>% select(project_member_id, enrollment_type),
-             by = c("projectMemberId" = "project_member_id")) %>%
-  inner_join(dataQuantity %>% select(projectMemberId, bgReadingsCount), "projectMemberId") %>%
-  filter(!projectMemberId %in% excluded)
