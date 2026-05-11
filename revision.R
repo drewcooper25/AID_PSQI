@@ -285,9 +285,13 @@ hba1c_report <- df_hba1c %>%
     n_valid_dates = sum(!is.na(hba1c_psqi_gap_days)),
     n_missing = sum(is.na(hba1c_psqi_gap_days)),
     mean_gap_days = mean(hba1c_psqi_gap_days, na.rm = TRUE),
+    sd_gap_days = sd(hba1c_psqi_gap_days, na.rm = TRUE),
     min_gap_days = min(hba1c_psqi_gap_days, na.rm = TRUE),
+    q1_gap_days = quantile(hba1c_psqi_gap_days, 0.25, na.rm = TRUE),
+    med_gap_day = median(hba1c_psqi_gap_days, na.rm = TRUE),
+    q3_gap_days = quantile(hba1c_psqi_gap_days, 0.75, na.rm = TRUE),
     max_gap_days = max(hba1c_psqi_gap_days, na.rm = TRUE),
-    sd_gap_days = sd(hba1c_psqi_gap_days, na.rm = TRUE)
+    range = max_gap_days - min_gap_days
   )
 
 print(hba1c_report)
@@ -393,3 +397,138 @@ final_bmi_report <- bind_rows(all_bmi_stats, group_bmi_stats) %>%
   select(group, n, median_iqr, mean_sd)
 
 print(final_bmi_report)
+
+#########
+# Analysis of diyaps commencement variables
+
+#-----------------------------------------
+# Helper function for YYYY + MM -> Date
+#-----------------------------------------
+
+make_date <- function(year, month) {
+  
+  year <- suppressWarnings(as.numeric(as.character(year)))
+  month <- suppressWarnings(as.numeric(as.character(month)))
+  
+  # invalid values -> NA
+  month[month < 1 | month > 12] <- NA
+  
+  out <- ifelse(
+    is.na(year) | is.na(month),
+    NA,
+    sprintf("%04d-%02d-01", year, month)
+  )
+  
+  as.Date(out, format = "%Y-%m-%d")
+}
+
+#-----------------------------------------
+# Build analysis dataframe
+#-----------------------------------------
+
+diyaps_summary <- redcap %>%
+  
+  mutate(
+    
+    # PSQI date
+    psqi_date = as.Date(psqi_timestamp),
+    
+    # DIYAPS initial start
+    diyaps_start_date = make_date(
+      year_diyaps_commencement,
+      month_diyaps_commencement
+    ),
+    
+    # DIYAPS stop
+    diyaps_stop_date = make_date(
+      year_diyaps_stop,
+      month_diyaps_stop
+    ),
+    
+    # DIYAPS restart
+    diyaps_restart_date = make_date(
+      year_diyaps_restart_2,
+      month_diyaps_restart
+    )
+    
+  ) %>%
+  
+  rowwise() %>%
+  
+  mutate(
+    
+    #-----------------------------------------
+    # First usage period
+    #-----------------------------------------
+    
+    first_use_end = case_when(
+      !is.na(diyaps_stop_date) ~ diyaps_stop_date,
+      TRUE ~ psqi_date
+    ),
+    
+    first_use_days = as.numeric(
+      first_use_end - diyaps_start_date
+    ),
+    
+    #-----------------------------------------
+    # Restart usage period
+    #-----------------------------------------
+    
+    restart_use_days = case_when(
+      !is.na(diyaps_restart_date) ~
+        as.numeric(psqi_date - diyaps_restart_date),
+      
+      TRUE ~ 0
+    ),
+    
+    #-----------------------------------------
+    # Total DIYAPS exposure
+    #-----------------------------------------
+    
+    total_diyaps_days =
+      coalesce(first_use_days, 0) +
+      coalesce(restart_use_days, 0),
+    
+    total_diyaps_years =
+      total_diyaps_days / 365.25
+    
+  ) %>%
+  
+  ungroup() %>%
+  
+  select(
+    
+    psqi_date,
+    
+    diyaps_start_date,
+    diyaps_stop_date,
+    diyaps_restart_date,
+    
+    first_use_days,
+    restart_use_days,
+    
+    total_diyaps_days,
+    total_diyaps_years,
+    
+    enrollment_type,
+    psqi_global_score
+  )
+
+diyaps_summary <- diyaps_summary %>%
+  filter(enrollment_type == "Adult using DIYAPS") %>%
+  filter(total_diyaps_years > 0) %>%
+  filter(!is.na(psqi_global_score))
+
+# --> 60 people using DIYAPS who did not provide a start date
+
+ggplot(
+  diyaps_summary,
+  aes(x = total_diyaps_years, y = psqi_global_score)
+) +
+  geom_point() +
+  labs(
+    title = "Distribution of Total DIYAPS Use",
+    x = "Total DIYAPS Use (Years)",
+    y = "psqi"
+  ) +
+  theme_minimal()
