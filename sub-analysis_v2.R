@@ -209,13 +209,6 @@ table_1
 #write_xlsx(table_1, "/Users/drew.cooper/Documents/HDS_PhD/ISPAD-JDRF/table_1.xlsx")
 
 ###——————————————————————————————————————————————————————————————————————————###
-# Some additional brief calculations
-num <- nrow(filter(study_data, enrollment_type == "User", psqi_global_score > 5))
-denom <- nrow(filter(study_data, enrollment_type == "User", !is.na(psqi_global_score)))
-
-psqi_over5 <- num/denom
-
-###——————————————————————————————————————————————————————————————————————————###
 # Define format "fmt" function(s) to calculate n (%), mean ± sd, and median [IQR]
 fmt_n_percent <- function(n, N, digits = 1) {
   pct <- 100 * n / N
@@ -291,6 +284,57 @@ names(summary_subset_flipped) <- summary_subset$group
 summary_subset_flipped <- tibble::rownames_to_column(summary_subset_flipped, "variable")
 
 #write_xlsx(summary_subset_flipped, "/Users/drew.cooper/Documents/HDS_PhD/ISPAD-JDRF/Subsample_glycemic_outcomes.xlsx")
+
+###——————————————————————————————————————————————————————————————————————————###
+
+# Spearman correlations between primary outcomes (PSQI, HFS-II, A1c) and demographic features (Age, Diabetes Duration and Gender)
+cor.test(
+  study_data$diabetes_duration_years,
+  study_data$psqi_global_score,
+  method = "spearman",
+  use = "complete.obs"
+)
+
+# Variables
+x_vars <- c("age", "diabetes_duration_years")
+y_vars <- c("psqi_global_score", "hfs", "A1c")
+
+# Function to run Spearman correlation
+run_spearman <- function(x, y, data) {
+  test <- cor.test(
+    data[[x]],
+    data[[y]],
+    method = "spearman",
+    use = "complete.obs"
+  )
+  
+  tibble(
+    independent_var = x,
+    dependent_var = y,
+    spearman_rho = unname(test$estimate),
+    p_value = test$p.value # still need to add Holm-Bonf test...
+  )
+}
+
+# Run all combinations
+correlation_table <- expand.grid(
+  x = x_vars,
+  y = y_vars,
+  stringsAsFactors = FALSE
+) %>%
+  pmap_dfr(~ run_spearman(..1, ..2, study_data))
+
+correlation_table
+
+# Subsample correlations
+correlation_table_subsample <- expand.grid(
+  x = x_vars,
+  y = y_vars,
+  stringsAsFactors = FALSE
+) %>%
+  pmap_dfr(~ run_spearman(..1, ..2, study_data %>% filter(enrollment_type == "User" & days_of_data >= 25)))
+
+correlation_table_subsample
 
 ###——————————————————————————————————————————————————————————————————————————###
 
@@ -687,7 +731,15 @@ h
 # https://rfortherestofus.com/2019/11/how-to-make-beautiful-tables-in-r
 
 ###——————————————————————————————————————————————————————————————————————————###
-# Testing for revised submission:
+# Testing for revised submission...
+
+# Some additional brief calculations
+num <- nrow(filter(study_data, enrollment_type == "User", psqi_global_score > 5))
+denom <- nrow(filter(study_data, enrollment_type == "User", !is.na(psqi_global_score)))
+
+psqi_over5 <- num/denom
+
+# Questionnaire binary calculations
 study_data$psqi_bool <- as.numeric(study_data$psqi_global_score >= 5)
 
 cor.test(

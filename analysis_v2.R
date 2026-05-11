@@ -168,6 +168,39 @@ redcap <- redcap %>%
     )
   )
 
+# create diabetes_duration_years variable
+redcap %<>%
+  mutate(
+    # 1. Convert the baseline timestamp to a Date object
+    baseline_date = as.Date(baseline_demographic_adults_diyaps_timestamp),
+    
+    # 2. Extract components to build the start date
+    # We prioritize Month + Year combinations first
+    start_date = case_when(
+      # Priority 1: DIYNOT specific month/year columns
+      !is.na(diynot_diagnosis_date_yyyy) & !is.na(diynot_diagnosis_date_mm) ~
+        make_date(year = diynot_diagnosis_date_yyyy, month = diynot_diagnosis_date_mm, day = 1),
+      
+      # Priority 2: Standard month/year columns
+      !is.na(year_of_diagnosis) & !is.na(month_of_diagnosis) ~
+        make_date(year = year_of_diagnosis, month = month_of_diagnosis, day = 1),
+      
+      # Priority 3: Year only (using July 1st as a mid-year estimate)
+      # We check all three possible year columns provided
+      !is.na(diynot_diagnosis_date_yyyy) ~ make_date(year = diynot_diagnosis_date_yyyy, month = 7, day = 1),
+      !is.na(diynot_diagnosis_date_yyyy_2) ~ make_date(year = diynot_diagnosis_date_yyyy_2, month = 7, day = 1),
+      !is.na(year_of_diagnosis) ~ make_date(year = year_of_diagnosis, month = 7, day = 1),
+      !is.na(year_of_diagnosis_2) ~ make_date(year = year_of_diagnosis_2, month = 7, day = 1),
+      
+      TRUE ~ as.Date(NA)
+    ),
+    
+    # 3. Calculate Duration
+    # Using time_length ensures leap years and varying month lengths are handled correctly
+    diabetes_duration_years = time_length(interval(start_date, baseline_date), "years")
+  )
+
+# generate new data frame study_data with all cleaned/normalised variables
 study_data <- redcap %>%
   mutate(
     psqi_component_1 = psqi$component_1,
@@ -209,6 +242,7 @@ study_data <- redcap %>%
     diabetes_mgmt,
     type_of_diabetes,
     other_type_of_diabetes,
+    diabetes_duration_years, # let's hope this works...
     gender,
     ethnicity,
     country_of_origin,

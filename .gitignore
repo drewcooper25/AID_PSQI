@@ -1,10 +1,12 @@
 # This is a gitignore file for the repo AID_PSQI
 
 .DS_Store
+.gitignore
 .Rhistory
 AID_PSQI_Analysis.R
 BgReadings.xlsx
 Enrollment_Extraction.R
 outputExcel.xlsx
 study_data.xlsx
+study_data_2026-02-12.xlsx
 Tebbe-5j.R
