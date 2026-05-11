@@ -9,14 +9,6 @@ output:
     toc_level: 2
 ---
 ```
-# **Temp-Todo's**
-**sub-analysis_v2.R**:
-
-- Add Holm-Bonferroni p-values to age and diabetes-duration analyses [w/ PSQI, HFS-II, A1c].
-- Fully flesh out correlation table(s) for above comparisons
-- Perform subgroup analyses on questionnaire-questionnaire correlations, again w/ age and diabetes-duration using model()
-- ...and do this within the AID user subgroup
-- explore results between age + diabetes-durations vars, and HFS !!!
 
 # **AID-PSQI README**
 

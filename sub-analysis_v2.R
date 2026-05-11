@@ -287,54 +287,7 @@ summary_subset_flipped <- tibble::rownames_to_column(summary_subset_flipped, "va
 
 ###——————————————————————————————————————————————————————————————————————————###
 
-# Spearman correlations between primary outcomes (PSQI, HFS-II, A1c) and demographic features (Age, Diabetes Duration and Gender)
-cor.test(
-  study_data$diabetes_duration_years,
-  study_data$psqi_global_score,
-  method = "spearman",
-  use = "complete.obs"
-)
 
-# Variables
-x_vars <- c("age", "diabetes_duration_years")
-y_vars <- c("psqi_global_score", "hfs", "A1c")
-
-# Function to run Spearman correlation
-run_spearman <- function(x, y, data) {
-  test <- cor.test(
-    data[[x]],
-    data[[y]],
-    method = "spearman",
-    use = "complete.obs"
-  )
-  
-  tibble(
-    independent_var = x,
-    dependent_var = y,
-    spearman_rho = unname(test$estimate),
-    p_value = test$p.value # still need to add Holm-Bonf test...
-  )
-}
-
-# Run all combinations
-correlation_table <- expand.grid(
-  x = x_vars,
-  y = y_vars,
-  stringsAsFactors = FALSE
-) %>%
-  pmap_dfr(~ run_spearman(..1, ..2, study_data))
-
-correlation_table
-
-# Subsample correlations
-correlation_table_subsample <- expand.grid(
-  x = x_vars,
-  y = y_vars,
-  stringsAsFactors = FALSE
-) %>%
-  pmap_dfr(~ run_spearman(..1, ..2, study_data %>% filter(enrollment_type == "User" & days_of_data >= 25)))
-
-correlation_table_subsample
 
 ###——————————————————————————————————————————————————————————————————————————###
 
@@ -416,7 +369,7 @@ hfs_results <- compare_groups(study_data, "enrollment_type", hfs_vars)
 #write.csv(hfs_results, "/Users/drew.cooper/Documents/HDS_PhD/ISPAD-JDRF/Wilcoxon-results/hfs_results_AID.csv", row.names = FALSE)
 
 # Glycemic measures Wilcoxon results
-glycemic_results <- compare_groups(study_data, "AID_type", "A1c") # glycemic_vars or "A1c" for "AID_type" 
+glycemic_results <- compare_groups(study_data, "gender", "A1c") # glycemic_vars or "A1c" for "AID_type" 
 #write.csv(glycemic_results, "/Users/drew.cooper/Documents/HDS_PhD/ISPAD-JDRF/Wilcoxon-results/glycemic_results_AID.csv", row.names = FALSE)
 
 # Glycemic measures Wilcoxon; n=60 subsample gendered analyse
@@ -511,7 +464,7 @@ cor.test(~ hfs + A1c, study_data %>% filter(enrollment_type == "Non-user"), meth
 
 ###——————————————————————————————————————————————————————————————————————————###
 
-# # Subsample Spearman analysis
+# # Subsample Spearman analysis Tebbe
 # cgm_data_subanalysis <- study_data %>%
 #   filter(enrollment_type == "User" & days_of_data >= 25)
 # 
@@ -731,7 +684,8 @@ h
 # https://rfortherestofus.com/2019/11/how-to-make-beautiful-tables-in-r
 
 ###——————————————————————————————————————————————————————————————————————————###
-# Testing for revised submission...
+###——————————————————————————————————————————————————————————————————————————###
+### Testing for revised submission...
 
 # Some additional brief calculations
 num <- nrow(filter(study_data, enrollment_type == "User", psqi_global_score > 5))
@@ -753,3 +707,136 @@ cor.test(~ hfs + psqi_bool,
          study_data %>% filter(enrollment_type == "Non-user"),
          method = "spearman",
          use = "complete.obs")
+
+###——————————————————————————————————————————————————————————————————————————###
+# Spearman correlations between primary outcomes (PSQI, HFS-II, A1c) and demographic features (Age, Diabetes Duration and Gender); full dataset and AID subsample
+
+# Define analysis dataset
+analysis_data <- study_data
+# analysis_data <- study_data %>%
+#   filter(
+#     enrollment_type == "User",
+#     days_of_data >= 25
+#   )
+
+# Variables
+x_vars <- c("age", "diabetes_duration_years")
+y_vars <- c("psqi_global_score", "hfs", "A1c")
+
+# All variable combinations
+var_pairs <- expand.grid(
+  independent_var = x_vars,
+  dependent_var = y_vars,
+  stringsAsFactors = FALSE
+)
+
+# Run correlations
+correlation_table <- do.call(
+  rbind,
+  lapply(seq_len(nrow(var_pairs)), function(i) {
+    
+    x <- var_pairs$independent_var[i]
+    y <- var_pairs$dependent_var[i]
+    
+    test <- cor.test(
+      analysis_data[[x]],
+      analysis_data[[y]],
+      method = "spearman",
+      use = "complete.obs"
+    )
+    
+    tibble(
+      independent_var = x,
+      dependent_var = y,
+      spearman_rho = unname(test$estimate),
+      p_value = test$p.value
+    )
+  })
+) %>%
+  mutate(
+    p_holm = p.adjust(p_value, method = "holm")
+  )
+
+correlation_table
+
+###——————————————————————————————————————————————————————————————————————————###
+
+#dev for cleaner psqi/hfs/a1c pipeline
+
+# Analysis function
+run_correlations <- function(data) {
+  
+  x_vars <- c("age", "diabetes_duration_years")
+  y_vars <- c("psqi_global_score", "hfs", "A1c")
+  
+  var_pairs <- expand.grid(
+    independent_var = x_vars,
+    dependent_var = y_vars,
+    stringsAsFactors = FALSE
+  )
+  
+  results <- do.call(
+    rbind,
+    lapply(seq_len(nrow(var_pairs)), function(i) {
+      
+      x <- var_pairs$independent_var[i]
+      y <- var_pairs$dependent_var[i]
+      
+      test <- cor.test(
+        data[[x]],
+        data[[y]],
+        method = "spearman",
+        use = "complete.obs"
+      )
+      
+      tibble(
+        independent_var = x,
+        dependent_var = y,
+        spearman_rho = unname(test$estimate),
+        p_value = test$p.value
+      )
+    })
+  ) %>%
+    mutate(
+      p_holm = p.adjust(p_value, method = "holm")
+    )
+  
+  return(results)
+}
+
+# Define datasets
+datasets <- list(
+  full_sample = study_data,
+  
+  subsample = study_data %>%
+    filter(
+      enrollment_type == "User",
+      days_of_data >= 25
+    )
+)
+
+output_path <- "/Users/drew.cooper/Documents/HDS_PhD/ISPAD-JDRF/"
+
+# Run analyses + export CSVs
+results_list <- lapply(names(datasets), function(name) {
+  
+  results <- run_correlations(datasets[[name]])
+  
+  write.csv(
+    results,
+    file.path(output_path, paste0(name, "_age_diabetes_duration_correlations.csv")),
+    row.names = FALSE
+  )
+  
+  results
+})
+
+###——————————————————————————————————————————————————————————————————————————###
+# AID users vs non-users, HFS-II, controlled for age and diabetes duration and gender
+
+model <- lm(
+  hfs ~ AID_type + age + diabetes_duration_years + gender,
+  data = study_data
+)
+
+summary(model)
