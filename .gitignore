@@ -3,6 +3,7 @@
 .DS_Store
 .gitignore
 .Rhistory
+drew-old-slow-scripts/
 AID_PSQI_Analysis.R
 BgReadings.xlsx
 Enrollment_Extraction.R
