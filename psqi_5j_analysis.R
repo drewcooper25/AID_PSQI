@@ -8,13 +8,16 @@ library(writexl)
 library(glue)
 
 rm(list = ls()) # clear the environment
+source("config.R")
 
-study_data <- read_excel("/Users/drew.cooper/AID_PSQI/study_data.xlsx") %>% select(
+study_data <- read_excel("output/study_data.xlsx") %>% select(
   record_id,
   gender,
   enrollment_type
 )
-codes <- read_excel("/Users/drew.cooper/REDCap/psqi_codex_v2_results.xlsx") %>% left_join(study_data, "record_id")
+
+psqi_codex <- file.path(data_dir, "psqi_5j_codex.xlsx")
+codes <- read_excel(psqi_codex) %>% left_join(study_data, "record_id")
 
 #Define column labels to check; defining psqi 5j outcome labels
 cols_to_check <- c(#"0a_missing", "0b_none",
@@ -142,69 +145,4 @@ total_n <- sum(chi_results$n_User, chi_results$n_Non_user)
 total_User     <- sum(chi_results$n_User)
 total_Non_user <- sum(chi_results$n_Non_user)
 
-#write.csv(chi_results, "/Users/drew.cooper/Documents/HDS_PhD/ISPAD-JDRF/chi_fish_5j_results.csv", row.names = FALSE)
-
-###——————————————————————————————————————————————————————————————————————————###
-
-# Generating an updated psqi_other_labels file; this block/output is CRITICAL for analysis_v2.R
-# This block works independently, so it can be copy-pasted into main.R LATERRRRR
-
-redcap <- read.csv("/Users/drew.cooper/REDCap/OPEN_DATA_2023-07-18_1202.csv") %>% select(
-  record_id,
-  gender,
-  enrollment_type,
-  year_of_birth
-)
-codes <- read_excel("/Users/drew.cooper/REDCap/psqi_codex_v2_results.xlsx") %>% left_join(redcap, "record_id")
-
-#Define column labels to check; defining psqi 5j outcome labels
-cols_to_check <- c("0a_missing", "0b_none",
-                   "1a_diabetes_related", "1b_diabetes_technology",
-                   "2_childcare_related", "3_stress_mental_health",
-                   "4_physical_health", "5_environment", "6_other")
-
-# Scoring function: is TRUE if string has 2 or 3 "x's" (defined by agreement criteria)
-is_true <- function(x) {
-  n_x <- stringr::str_count(x, "x")
-  n_x %in% c(2, 3)
-}
-
-# Make logical TRUE/FALSE columns
-codes_tf <- codes %>%
-  mutate(across(all_of(cols_to_check), is_true))
-
-# Get numbered column names
-num_cols <- grep("^[0-9]|0[a-b]|1[a-b]", names(codes_tf), value = TRUE)
-
-# Build bool_codes with labels
-bool_codes <- within(codes_tf, {
-  labels <- apply(codes_tf[num_cols], 1, function(x)
-    paste(names(x)[x], collapse = ", "))
-})
-
-# Drop numbered columns and columns we "don't need"
-bool_codes <- bool_codes[ , !(names(bool_codes) %in% num_cols)]
-bool_codes <- subset(bool_codes, select = -c(psqi_5other, gender, enrollment_type, year_of_birth))
-
-# Print and save
-print(bool_codes)
-#write_xlsx(bool_codes, "/Users/drew.cooper/REDCap/psqi_5j_labels.xlsx")
-
-###——————————————————————————————————————————————————————————————————————————###
-
-# ID disagreements in coding...
-# Set-up for filtering
-disagreements <- codes %>%
-  # 1. ID agreement columns for later processing...
-  filter(if_any(all_of(cols_to_check), ~ !(.x %in% c("xxx", "ooo")))) %>%
-  
-  # 2. Replace agreement values ("xxx" or "ooo") with NA, keep disagreements visible
-  mutate(across(all_of(cols_to_check),
-                ~ ifelse(.x %in% c("xxx", "ooo"), NA, .x))) %>%
-  
-  # 3. Keep only relevant columns for review
-  select(record_id, psqi_5other, all_of(cols_to_check), enrollment_type, gender, year_of_birth)
-
-# Print and save
-print(disagreements)
-#write.csv(disagreements, "/Users/drew.cooper/REDCap/psqi_disagreements.csv", row.names = FALSE)
+write.csv(chi_results, "output/chi_fish_5j_results.csv", row.names = FALSE)

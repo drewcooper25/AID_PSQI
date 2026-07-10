@@ -8,13 +8,16 @@ library(readxl)
 library(writexl)
 library(tidyverse)
 library(glue)
+library(ImpactEffectsize)
+library(pwr)
 
 rm(list=ls())
+source("config.R")
 
-study_data <- read_excel("/Users/drew.cooper/AID_PSQI/study_data.xlsx")
+study_data <- read_excel("output/study_data.xlsx")
 
 ###——————————————————————————————————————————————————————————————————————————###
-# Creating Table 1
+# Creating Table 2
 
 # ===========================
 # 0) Group reformatting
@@ -35,7 +38,7 @@ study_data <- study_data %>%
     })
   )
 
-# Inhaled insuli, SGLT2-Inhibitors and Other reformatting
+# Inhaled insulin, SGLT2-Inhibitors and Other reformatting
 study_data <- study_data %>%
   mutate(
     diabetes_mgmt = str_replace_all(
@@ -58,7 +61,7 @@ study_data <- study_data %>%
       education %in% c("Master's degree or equivalent level (e.g. MA, MS, MEd)",
                        "Professional degree or equivalent level (e.g. MD, DDS, DVM)",
                        "Doctorate (e.g. PhD, EdD)") ~ 
-        "Post-graduate Degree (MSc, MD, PhD, etc.",
+        "Post-graduate Degree (MSc, MD, PhD, etc.)",
       education %in% c("Associate degree (e.g. AA, AS)",
                        "Bachelor's degree or equivalent level (e.g. BA, BS)") ~
         "Undergraduate Degree",
@@ -177,7 +180,7 @@ count_row <- {
 }
 
 # 4) Build Demographics Table
-table_1 <- bind_rows(
+table_2 <- bind_rows(
   count_row,
   map_df(c(numericals, categoricals), build_var)
 )
@@ -197,7 +200,7 @@ variable_order <- c(
   "A1c"
 )
 
-table_1 <- table_1 %>%
+table_2 <- table_2 %>%
   # enforce variable order
   mutate(variable = factor(variable, levels = variable_order, ordered = TRUE)) %>%
   # enforce level order within variable
@@ -205,8 +208,23 @@ table_1 <- table_1 %>%
   arrange(variable)
 
 # 6) Output
-table_1
-#write_xlsx(table_1, "/Users/drew.cooper/Documents/HDS_PhD/ISPAD-JDRF/table_1.xlsx")
+table_2
+write.csv(table_2, "output/table_2.csv")
+
+# Impact Effect sizes for PSQI and HFS-II
+iES_psqi <- Impact(Data = study_data$psqi_global_score,
+                   Cls = na.omit(study_data$enrollment_type),
+                   PlotIt = TRUE,
+                   pde = TRUE,
+                   col = c("purple", "orange"),
+                   medianLines = TRUE)$Impact
+
+iES_hfs <- Impact(Data = study_data$hfs,
+                  Cls = na.omit(study_data$enrollment_type),
+                  PlotIt = TRUE,
+                  pde = TRUE,
+                  col = c("purple", "orange"),
+                  medianLines = TRUE)$Impact
 
 ###——————————————————————————————————————————————————————————————————————————###
 # Define format "fmt" function(s) to calculate n (%), mean ± sd, and median [IQR]
@@ -283,11 +301,7 @@ summary_subset_flipped <- as.data.frame(t(summary_subset))
 names(summary_subset_flipped) <- summary_subset$group
 summary_subset_flipped <- tibble::rownames_to_column(summary_subset_flipped, "variable")
 
-#write_xlsx(summary_subset_flipped, "/Users/drew.cooper/Documents/HDS_PhD/ISPAD-JDRF/Subsample_glycemic_outcomes.xlsx")
-
-###——————————————————————————————————————————————————————————————————————————###
-
-
+write.csv(summary_subset_flipped, "output/subsample_supp_table_s2.csv")
 
 ###——————————————————————————————————————————————————————————————————————————###
 
@@ -337,14 +351,14 @@ compare_groups <- function(data, group_var, outcome_vars) {
       variable = var,
       group1 = group_names[1],
       group2 = group_names[2],
-      median_group1 = median1,
-      iqr_lower_group1 = q1_1,
-      iqr_upper_group1 = q3_1,
-      median_group2 = median2,
-      iqr_lower_group2 = q1_2,
-      iqr_upper_group2 = q3_2,
-      test_used = "Wilcoxon rank-sum",
-      statistic = unname(test$statistic),
+      med1 = round(median1, 3),
+      q1_1 = round(q1_1, 3),
+      q3_1 = round(q3_1, 3),
+      med2 = round(median2, 3),
+      q1_2 = round(q1_2, 3),
+      q3_2 = round(q3_2, 3),
+      #test_used = "Wilcoxon rank-sum",
+      #statistic = unname(test$statistic),
       p_value = test$p.value,
       stringsAsFactors = FALSE
     )
@@ -355,45 +369,72 @@ compare_groups <- function(data, group_var, outcome_vars) {
   results_df
 }
 
-# Example usage
+# Get questionnaire / data variable names
 psqi_vars <- grep("^psqi_(?!.*other)", names(study_data), value = TRUE, perl = TRUE)
 hfs_vars <- grep("^hfs", names(study_data), value = TRUE)
 glycemic_vars <- c("A1c", "TIR", "TITR", "TAR", "TAR1", "TAR2", "TBR", "TBR1", "TBR2", "mean", "sd", "cv")
 
-# PSQI Wilcoxon results (swap in "enrollment_type", "gender", "diabetes_group", or "AID_type")
-psqi_results <- compare_groups(study_data, "enrollment_type", psqi_vars)
-#write.csv(psqi_results, "/Users/drew.cooper/Documents/HDS_PhD/ISPAD-JDRF/Wilcoxon-results/psqi_results_AID.csv", row.names = FALSE)
+# Generate the Wilcoxon .csv results files
+outcomes = list(
+  psqi = psqi_vars,
+  hfs = hfs_vars,
+  glycemic = list(
+    enrollment_type = glycemic_vars,
+    gender = glycemic_vars,
+    diabetes_group = glycemic_vars,
+    AID_type = "A1c"
+  )
+)
 
-# HFS Wilcoxon results
-hfs_results <- compare_groups(study_data, "enrollment_type", hfs_vars)
-#write.csv(hfs_results, "/Users/drew.cooper/Documents/HDS_PhD/ISPAD-JDRF/Wilcoxon-results/hfs_results_AID.csv", row.names = FALSE)
+groups <- c("enrollment_type", "gender", "diabetes_group", "AID_type")
 
-# Glycemic measures Wilcoxon results
-glycemic_results <- compare_groups(study_data, "gender", "A1c") # glycemic_vars or "A1c" for "AID_type" 
-#write.csv(glycemic_results, "/Users/drew.cooper/Documents/HDS_PhD/ISPAD-JDRF/Wilcoxon-results/glycemic_results_AID.csv", row.names = FALSE)
+for (group in groups) {
+  for (outcome in c("psqi", "hfs", "glycemic")) {
 
-# Glycemic measures Wilcoxon; n=60 subsample gendered analyse
-subsample <- study_data %>%
-  filter(enrollment_type == "User", days_of_data > 25, !is.na(gender))
-subsample_results <- compare_groups(subsample, "gender", glycemic_vars)
+    vars <- if (outcome == "glycemic") {
+      outcomes$glycemic[[group]]
+    } else {
+      outcomes[[outcome]]
+    }
 
-# write.csv(subsample_results, "/Users/drew.cooper/Documents/HDS_PhD/ISPAD-JDRF/Wilcoxon-results/glycemic_results_subsample-gender.csv", row.names = FALSE)
+    results <- compare_groups(study_data, group, vars)
+
+    write.csv(
+      results,
+      sprintf("output/%s_wilcoxon_%s.csv", outcome, group),
+      row.names = FALSE
+    )
+  }
+}
 
 ###——————————————————————————————————————————————————————————————————————————###
-# Questionnaire Wilcoxon testing by subgroup
-wilcox.test(psqi_global_score ~ diabetes_group, study_data) # T1D/LADA vs. T2D/MODY
-wilcox.test(psqi_global_score ~ diabetes_group, study_data %>% filter(enrollment_type == "User"))
-wilcox.test(psqi_global_score ~ AID_type, study_data) # OS-AID vs. C-AID
-wilcox.test(hfs ~ AID_type, study_data) 
+# n=60 subsample analyses
+subsample <- study_data %>%
+  filter(enrollment_type == "User", days_of_data > 25, !is.na(gender))
+
+subsample_gender_psqi <- compare_groups(subsample, "gender", psqi_vars)
+write.csv(subsample_gender_psqi, "output/psqi_wilcoxon_subsample-gender.csv", row.names = FALSE)
+
+subsample_diagroup_psqi <- compare_groups(subsample, "diabetes_group", psqi_vars)
+write.csv(subsample_diagroup_psqi, "output/psqi_wilcoxon_subsample-diabetes_group.csv", row.names = FALSE)
+
+subsample_gender_gly <- compare_groups(subsample, "gender", glycemic_vars)
+write.csv(subsample_gender_gly, "output/glycemic_wilcoxon_subsample-gender.csv", row.names = FALSE)
 
 ###——————————————————————————————————————————————————————————————————————————###
 # Questionnaire (PSQI vs. HFS-II) Spearman correlation
-cor.test(
-  study_data$psqi_global_score,
-  study_data$hfs,
-  method = "spearman",
-  use = "complete.obs"
-)
+cor.test(~ hfs + psqi_global_score, study_data, method = "spearman")
+cor.test(~ hfs + psqi_global_score, study_data %>% filter(enrollment_type == "User"), method = "spearman")
+cor.test(~ hfs + psqi_global_score, study_data %>% filter(enrollment_type == "Non-user"), method = "spearman")
+
+# A1c-questionnaire analyses
+cor.test(~ psqi_global_score + A1c, study_data, method = "spearman")
+cor.test(~ psqi_global_score + A1c, study_data %>% filter(enrollment_type == "User"), method = "spearman")
+cor.test(~ psqi_global_score + A1c, study_data %>% filter(enrollment_type == "Non-user"), method = "spearman")
+
+cor.test(~ hfs + A1c, study_data, method = "spearman")
+cor.test(~ hfs + A1c, study_data %>% filter(enrollment_type == "User"), method = "spearman")
+cor.test(~ hfs + A1c, study_data %>% filter(enrollment_type == "Non-user"), method = "spearman")
 
 # Spearman correlations between questionnaires and glycemic outcomes
 questionnaire_vars <- c("psqi_global_score", "hfs")
@@ -447,97 +488,14 @@ corr_table <- function(data, row_vars, col_vars) {
 }
 
 cgm_vars <- c("mean", "sd", "cv", "TIR", "TITR", "TAR", "TAR1", "TAR2", "TBR", "TBR1", "TBR2")
-
 questionnaire_glycemia_corr <- corr_table(
   study_data %>% filter(enrollment_type == "User" & days_of_data >= 25),
-  cgm_vars, questionnaire_vars)
+  cgm_vars, questionnaire_vars
+)
 questionnaire_glycemia_corr <- rownames_to_column(
   questionnaire_glycemia_corr, var = "glycemic_var"
 )
-#write_xlsx(questionnaire_glycemia_corr, "/Users/drew.cooper/Documents/HDS_PhD/ISPAD-JDRF/questionnaire_glycemia_corr.xlsx")
-
-# A1c analysis (swap between ~ psqi_global_score || $hfs)
-cor.test(~ hfs + A1c, study_data, method = "spearman")
-
-cor.test(~ hfs + A1c, study_data %>% filter(enrollment_type == "User"), method = "spearman")
-cor.test(~ hfs + A1c, study_data %>% filter(enrollment_type == "Non-user"), method = "spearman")
-
-###——————————————————————————————————————————————————————————————————————————###
-
-# # Subsample Spearman analysis Tebbe
-# cgm_data_subanalysis <- study_data %>%
-#   filter(enrollment_type == "User" & days_of_data >= 25)
-# 
-# metrics_to_correlate_1 <- c(
-#   "mean","sd","cv","TIR","TOR","TAR","TBR","TITR","TAR1","TAR2","TBR1","TBR2"
-# )
-# 
-# metrics_to_correlate_2 <- c(
-#   "hfs", "psqi_global_score"
-# )
-# 
-# results <- expand_grid(metrics_to_correlate_1, metrics_to_correlate_2) %>%
-#   rowwise() %>%
-#   pmap(\(metrics_to_correlate_1, metrics_to_correlate_2) {
-#     test_result <- cor.test(
-#       cgm_data_subanalysis[[metrics_to_correlate_1]],
-#       cgm_data_subanalysis[[metrics_to_correlate_2]],
-#       method = "spearman"
-#     )
-#     tibble(
-#       metric = glue("{metrics_to_correlate_1} ~ {metrics_to_correlate_2}"),
-#       rho_value = test_result$estimate,
-#       p_value = test_result$p.value
-#     )
-#   }) %>%
-#   list_rbind() %>%
-#   mutate
-# 
-# # Save
-# #write_xlsx(results, "/Users/drew.cooper/Documents/HDS_PhD/ISPAD-JDRF/cgm_subsample_spearman_Tebbe.xlsx")
-# # these outcomes match up with my calculations; lovely!
-
-###——————————————————————————————————————————————————————————————————————————###
-
-# Histogram for visualisaing variable distributions
-hist(study_data$psqi_global_score,
-     breaks = 20, col = "purple", border = "pink",
-     xlim = c(0, 20), ylim = c(0, 80))
-
-# Cohen's d; so we can see what the outcome is for assumed normality
-library(effsize)
-cohen.d(d = study_data$hfs,
-        f = na.omit(study_data$enrollment_type),
-        paired = FALSE,
-        conf.level = 0.8)
-
-# Impact Effect Size (nonparametric effect size)
-library(ImpactEffectsize)
-library(pwr)
-
-Impact(Data = study_data$psqi_global_score,
-       Cls = na.omit(study_data$enrollment_type),
-       PlotIt = TRUE,
-       pde = TRUE,
-       col = c("red", "blue"),
-       medianLines = TRUE)
-
-# Let's try storing outputs
-iES_psqi <- Impact(Data = study_data$psqi_global_score,
-                   Cls = na.omit(study_data$enrollment_type),
-                   PlotIt = TRUE,
-                   pde = TRUE,
-                   col = c("purple", "orange"),
-                   medianLines = TRUE)$Impact
-
-iES_hfs <- Impact(Data = study_data$hfs,
-                  Cls = na.omit(study_data$enrollment_type),
-                  PlotIt = TRUE,
-                  pde = TRUE,
-                  col = c("purple", "orange"),
-                  medianLines = TRUE)$Impact
-
-pwr.t.test(d = impact_effect_size, sig.level = 0.05, power = 0.8, type = "two.sample", alternative = "two.sided")$n
+write.csv(questionnaire_glycemia_corr, "output/questionnaire_glycemia_corr.csv", row.names = FALSE)
 
 ###——————————————————————————————————————————————————————————————————————————###
 # Graphing PSQI and HFS outcomes
@@ -603,7 +561,6 @@ p <- ggplot(long_df %>% filter(!is.na(group_value)),
     panel.grid.minor = element_line(color = "grey"),
     axis.title.x = element_blank(),
     axis.text.x = element_text(angle = 45, hjust = 1, color = "black"),
-    #axis.text.x = element_blank(),
     axis.text.y = element_text(color = "black"),
     axis.title.y = element_text(color = "black"),
     strip.text = element_blank(),
@@ -611,9 +568,31 @@ p <- ggplot(long_df %>% filter(!is.na(group_value)),
   ) +
   labs(y = "PSQI Score")
 p
+ggsave("figures/Figure1.tif", plot = p, width = 20, height = 10, units = "cm", dpi = 300, bg = "white")
 
-# ggsave("/Users/drew.cooper/Documents/HDS_PhD/ISPAD-JDRF/Figure1.tif",
-#        plot = p, width = 20, height = 10, units = "cm", dpi = 300, bg = "white")
+h <- ggplot(long_df %>% filter(!is.na(group_value)),
+            aes(x = group_value, y = hfs, fill = group_value)) +
+  ylim(0,45) +
+  geom_violin(trim = TRUE, color = "grey") +
+  geom_boxplot(width = 0.1, outlier.shape = NA, color = "white") +
+  facet_wrap(~group_type, scales = "free_x", nrow = 1) +
+  scale_fill_manual(values = custom_colors) +
+  theme_minimal() +
+  theme(
+    panel.background = element_rect(fill = "white", color = NA),
+    plot.background = element_rect(fill = "white", color = NA),
+    panel.grid.major = element_line(color = "grey"),
+    panel.grid.minor = element_line(color = "grey"),
+    axis.title.x = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1, color = "black"),
+    axis.text.y = element_text(color = "black"),
+    axis.title.y = element_text(color = "black"),
+    strip.text = element_blank(),
+    legend.position = "none"
+  ) +
+  labs(y = "PSQI Score")
+h
+ggsave("figures/Figure2.tif", plot = h, width = 20, height = 10, units = "cm", dpi = 300, bg = "white")
 
 ###——————————————————————————————————————————————————————————————————————————###
 # 100% stacked bar chart of Subsample
@@ -660,7 +639,7 @@ legend_labels <- c(
 )
 
 # Plot: each bar = one participant
-h <- ggplot(plot_data, aes(x = factor(record_id), y = Value, fill = Range)) +
+b <- ggplot(plot_data, aes(x = factor(record_id), y = Value, fill = Range)) +
   geom_col() +
   scale_fill_manual(values = custom_colors, labels = legend_labels) +
   scale_y_continuous(labels = scales::percent_format(scale = 1)) +
@@ -674,14 +653,9 @@ h <- ggplot(plot_data, aes(x = factor(record_id), y = Value, fill = Range)) +
     axis.text.x = element_blank(),
     axis.ticks.x = element_blank()
   )
-h
+b
 
-# ggsave("/Users/drew.cooper/Documents/HDS_PhD/ISPAD-JDRF/subset_heatmap.png",
-#        plot = h, width = 20, height = 10, units = "cm", dpi = 300, bg = "white")
-
-# for when we want to make things beautiful...
-# https://cran.r-project.org/web/packages/data.table/vignettes/datatable-intro.html
-# https://rfortherestofus.com/2019/11/how-to-make-beautiful-tables-in-r
+ggsave("figures/subset_heatmap.tif", plot = b, width = 20, height = 10, units = "cm", dpi = 300, bg = "white")
 
 ###——————————————————————————————————————————————————————————————————————————###
 ###——————————————————————————————————————————————————————————————————————————###
@@ -696,74 +670,12 @@ psqi_over5 <- num/denom
 # Questionnaire binary calculations
 study_data$psqi_bool <- as.numeric(study_data$psqi_global_score >= 5)
 
-cor.test(
-  study_data$psqi_bool,
-  study_data$hfs,
-  method = "spearman",
-  use = "complete.obs"
-)
-
-cor.test(~ hfs + psqi_bool,
-         study_data %>% filter(enrollment_type == "Non-user"),
-         method = "spearman",
-         use = "complete.obs")
+cor.test(~ hfs + psqi_bool, study_data, method = "spearman")
+cor.test(~ hfs + psqi_bool, study_data %>% filter(enrollment_type == "User"), method = "spearman")
+cor.test(~ hfs + psqi_bool, study_data %>% filter(enrollment_type == "Non-user"), method = "spearman")
 
 ###——————————————————————————————————————————————————————————————————————————###
 # Spearman correlations between primary outcomes (PSQI, HFS-II, A1c) and demographic features (Age, Diabetes Duration and Gender); full dataset and AID subsample
-
-# Define analysis dataset
-analysis_data <- study_data
-# analysis_data <- study_data %>%
-#   filter(
-#     enrollment_type == "User",
-#     days_of_data >= 25
-#   )
-
-# Variables
-x_vars <- c("age", "diabetes_duration_years")
-y_vars <- c("psqi_global_score", "hfs", "A1c")
-
-# All variable combinations
-var_pairs <- expand.grid(
-  independent_var = x_vars,
-  dependent_var = y_vars,
-  stringsAsFactors = FALSE
-)
-
-# Run correlations
-correlation_table <- do.call(
-  rbind,
-  lapply(seq_len(nrow(var_pairs)), function(i) {
-    
-    x <- var_pairs$independent_var[i]
-    y <- var_pairs$dependent_var[i]
-    
-    test <- cor.test(
-      analysis_data[[x]],
-      analysis_data[[y]],
-      method = "spearman",
-      use = "complete.obs"
-    )
-    
-    tibble(
-      independent_var = x,
-      dependent_var = y,
-      spearman_rho = unname(test$estimate),
-      p_value = test$p.value
-    )
-  })
-) %>%
-  mutate(
-    p_holm = p.adjust(p_value, method = "holm")
-  )
-
-correlation_table
-
-###——————————————————————————————————————————————————————————————————————————###
-
-#dev for cleaner psqi/hfs/a1c pipeline
-
-# Analysis function
 run_correlations <- function(data) {
   
   x_vars <- c("age", "diabetes_duration_years")
@@ -815,25 +727,16 @@ datasets <- list(
     )
 )
 
-output_path <- "/Users/drew.cooper/Documents/HDS_PhD/ISPAD-JDRF/"
-
 # Run analyses + export CSVs
 results_list <- lapply(names(datasets), function(name) {
-  
   results <- run_correlations(datasets[[name]])
   
-  write.csv(
-    results,
-    file.path(output_path, paste0(name, "_age_diabetes_duration_correlations.csv")),
-    row.names = FALSE
-  )
-  
-  results
+  write.csv(results, sprintf("output/%s_%s.csv", name, "age_diabetes_duration_corr"), row.names = FALSE)
+
 })
 
 ###——————————————————————————————————————————————————————————————————————————###
 # AID users vs non-users, HFS-II, controlled for age and diabetes duration and gender
-
 model <- lm(
   hfs ~ AID_type + age + diabetes_duration_years + gender,
   data = study_data

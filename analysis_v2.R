@@ -13,17 +13,17 @@ library(writexl)
 library(openxlsx)
 
 rm(list=ls())
-setwd("/Users/drew.cooper/AID_PSQI")
+source("config.R")
 
 source("cleanup_data.R")
 source("gv_metrics.R")
 source("gateway_linkages.R")
 source("psqi.R")
 
-redcap_data_file <- "/Users/drew.cooper/REDCap/OPEN_DATA_2023-07-18_1202.csv"
-gateway_linkages_file <- "/Users/drew.cooper/OPENonOH/Participants_FULL_BIGOPEN+OPENLight_2021.07.13.xlsx"
-bg_readings_file <- "/Users/drew.cooper/AID_PSQI/BgReadings.xlsx"
-labels_file <- "/Users/drew.cooper/REDCap/psqi_5j_labels.xlsx" #this is updated from the scored codex
+redcap_data_file <- file.path(data_dir, "OPEN_REDCap_2023-07-18_1202.csv")
+gateway_linkages_file <- file.path(data_dir, "Gateway_Linkages_2021-07-13.xlsx")
+bg_readings_file <- file.path(getwd(), "output/BgReadings.xlsx")
+labels_file <- file.path(data_dir, "psqi_5j_labels.xlsx")
 
 labels <- read_excel(labels_file)
 
@@ -376,4 +376,4 @@ study_data <- study_data %>%
 # Explicitly re-code record_id 834 as "OS-AID" $diabetes_mgmt and $AID_type
 study_data[study_data$record_id == 834, c("diabetes_mgmt", "AID_type")] <- "OS-AID"
 
-#write_xlsx(study_data, path = "study_data.xlsx")
+write_xlsx(study_data, path = file.path(getwd(), "output/study_data.xlsx"))

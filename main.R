@@ -8,10 +8,11 @@ library(progressr)
 library(furrr)
 library(magrittr)
 library(slider)
+library(readxl)
 library(writexl)
 
-setwd("/Users/drew.cooper/AID_PSQI")
-getwd()
+rm(list=ls())
+source("config.R")
 
 source("nightscout.R")
 source("androidaps.R")
@@ -23,13 +24,12 @@ source("cleanup_data.R")
 
 plan(multisession, workers = availableCores())
 
-openHumansZip <- "/Users/drew.cooper/OPENonOH/zips/n=147_OPENonOH_23.5.2023.zip"
-extractDir <- "/Users/drew.cooper/OPENonOH/extract"
-redCapDataFile <- "/Users/drew.cooper/REDCap/OPEN_DATA_2023-07-18_1202.csv"
-gatewayLinkagesFile <- "/Users/drew.cooper/OPENonOH/Participants_FULL_BIGOPEN+OPENLight_2021.07.13.xlsx"
-timezonesFile <- "/Users/drew.cooper/REDCap/timezones.xlsx"
-outputExcel <- "/Users/drew.cooper/AID_PSQI/BgReadings.xlsx"
-
+openHumansZip <- file.path(data_dir, "n=147_OPENonOH_23.5.2023.zip")
+extractDir <- file.path(data_dir, "extract")
+redCapDataFile <- file.path(data_dir, "OPEN_REDCap_2023-07-18_1202.csv")
+gatewayLinkagesFile <- file.path(data_dir, "Gateway_Linkages_2021-07-13.xlsx")
+timezonesFile <- file.path(data_dir, "timezones.xlsx")
+outputExcel <- file.path(getwd(), "output/BgReadings.xlsx")
 
 cli_h1("Loading REDCap dataset and Gateway linkages")
 
