@@ -10,15 +10,15 @@ library(magrittr)
 library(slider)
 library(readxl)
 
-setwd("/Users/drew.cooper/AID_PSQI")
-getwd()
+rm(list=ls())
+source("config.R")
 
 source("gateway_linkages.R")
 source("psqi.R")
-
 source("cleanup_data.R")
-redcap_data_file <- "/Users/drew.cooper/REDCap/OPEN_DATA_2023-07-18_1202.csv"
-gateway_linkages_file <- "/Users/drew.cooper/OPENonOH/Participants_FULL_BIGOPEN+OPENLight_2021.07.13.xlsx"
+
+redcap_data_file <- file.path(data_dir, "OPEN_REDCap_2023-07-18_1202.csv")
+gateway_linkages_file <- file.path(data_dir, "Gateway_Linkages_2021-07-13.xlsx")
 
 gateway_links <- load_gateway_linkages(gateway_linkages_file) %>%
   filter(!is.null(project_member_id) & !is.null(survey_record_id))
